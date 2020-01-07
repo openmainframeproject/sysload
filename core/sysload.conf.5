@@ -1,0 +1,80 @@
+.\" 
+.TH "SYSLOAD.CONF" "5" "November 2007" "System Loader UI v0.1" ""
+.SH "NAME"
+sysload.conf \- configuration file for System Loader
+.SH "DESCRIPTION"
+.LP 
+This file is read by the System Loader user interface 'sysload' (see sysload(8)).
+.LP 
+It might look as follows:
+.IP 
+.nf 
+default linux1
+timeout 0
+password secret
+
+userinterface linemode /dev/tty1
+userinterface linemode /dev/tty
+
+boot_entry {
+        title Debian GNU/Linux, latest kernel
+        label linux1
+
+        root block://(/dev/hda5,ext3)/boot/
+        kernel vmlinuz
+        initrd initrd.img
+        cmdline root=/dev/hda5 ro ramdisk_size=100000
+} 
+
+boot_entry {
+        title Debian GNU/Linux, rescue kernel (locked)
+        label linux2
+
+        lock
+        root block://(/dev/hda5,ext3)/boot/
+        kernel vmlinuz\-2.6.11\-kanotix\-7
+        initrd initrd.img\-2.6.11\-kanotix\-7
+        cmdline root=/dev/hda5 ro ramdisk_size=100000
+} 
+
+boot_entry {
+        title System Reboot
+        label reboot
+
+        reboot
+}
+
+boot_entry {
+        title System Halt
+
+        halt
+}
+.fi 
+.LP 
+This configuration file specifies that sysload offers a menu with 4 entries on two linemode user interface instances, one on /dev/tty1 and one on /dev/tty. It offers the options to boot 2 different kernels or to reboot or to halt the system. Timeout is disabled, the first kernel is selected as default and the second kernel is locked and can only be activated by entering the password 'secret'. The menu will look similar to the following lines:
+.IP 
+.nf 
+sysload user interface is starting.
+Configuration file source: file:///boot/boot_menu.config
+
+Welcome to System Loader 0.x
+
+The following boot options are available:
+
+\-> 1 Debian GNU/Linux, latest kernel
+  [2 Debian GNU/Linux, rescue kernel (locked)]
+   3 System Reboot
+   4 System Halt
+
+Please enter your selection:
+.fi 
+.LP 
+When the user selects one of the available boot options or when a timeout occurs the selected action will be executed.
+
+.SH "AUTHOR"
+Written by Ralph Wuerthner and Michael Loehr.
+.SH "SEE ALSO"
+sysload(8), sysload_admin(8), sysload_admin.conf(5)
+.br 
+.sp
+The System Loader distribution contains extensive documentation in the design and HOWTO documents. It is recommended to use these documents as a reference to setup a sysload based second stage bootloader.

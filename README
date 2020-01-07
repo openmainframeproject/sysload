@@ -1,0 +1,247 @@
+====================================================================
+ System Loader README file 
+ by Stephan Mann
+====================================================================
+ 1. Introduction
+ 2. Authors
+ 3. Build System Loader
+ 3.1 Dependencies
+ 3.2 Building tools
+ 3.3 Building manually
+ 3.4 Building an RPM
+ 4. Install System Loader
+ 5. Setup System Loader
+ 5.1 Create a ramdisk
+ 5.2 Configure System Loader
+ 5.3 Adjust first stage boot loader
+ 6. Start using System Loader
+ 7. Known issues 
+====================================================================
+
+
+1. Introduction
+===============
+System Loader is a second stage boot loader. Invoked by a system 
+specific first stage boot loader, it provides a feature rich Linux 
+boot environment which serves as a comfortable boot loader reachable 
+even from a remote machine or as a rescue system that is always 
+available in the boot sequence.
+
+System Loader is based on the concept of having a Linux kernel with 
+kexec support as boot loader and boot the actual kernel through the 
+kexec system call.
+
+This is a short step-by-step manual which aims to get new users of 
+System Loader started. For more detailed documentation, please refer 
+to the Design and the HOWTO documents provided with System Loader.
+
+
+2. Build System Loader
+======================
+There are currently two ways to build System Loader. Either by 
+manually executing `make' or by using `rpmbuild'. There are some 
+dependencies which need to be fulfilled in either case. If `make' 
+is executed manually, these dependencies need to be compiled and 
+installed before `make' is run. `rpmbuild' will take care of this 
+automatically, provided it can find the archives.
+
+To remove these dependencies is an item on the to-do list.
+
+
+2.1 Dependencies
+----------------
+As stated above, these dependencies don't need to be built or 
+installed if `rpmbuild' is used. 
+
+libssh-0.11 can be installed using the following commands. Be sure 
+to get version 0.11 since version 0.2 won't work.
+
+	wget http://0xbadc0de.be/libssh/libssh-0.11.tgz
+	tar xvfz libssh-0.11.tgz
+	cd libssh-0.11
+	./configure && make
+	su
+	make install
+
+get_kernel_version can be obtained through a Suse repository.
+
+	wget ftp://ftp.gwdg.de/pub/linux/suse/opensuse/distribution/10.3/\
+	     repo/src-oss/suse/src/aaa_base-10.3-90.src.rpm
+	rpm2cpio aaa_base-10.3-90.src.rpm | cpio -i get_kernel_version.c
+	gcc -o get_kernel_version get_kernel_version.c
+	su
+	cp get_kernel_version /usr/local/bin/
+
+
+2.2 Building tools 
+------------------
+The following tools are required to build System Loader from source:
+
+	* bison
+	* flex
+	* make
+	* gcc
+
+To build the documentation, two additional tools are required:
+
+	* fig2dev
+	* pdflatex
+
+
+2.3 Building manually
+---------------------
+If all dependencies mentioned above are properly built and installed, 
+the build process can be started by simply executing `make'.
+
+There is a Makefile in the sysload root dir which builds all parts of 
+System Loader. It is also possible to build parts of sysload by using 
+the Makefiles in the respective subdirs.
+
+
+2.4 Building an RPM
+-------------------
+If all dependencies mentioned above and `rpmbuild' is available, 
+gather the following files into one directory.
+
+	* sysload-X.Y.Z.tar.gz
+	* libssh-0.11.tgz (see dependencies section)
+	* get_kernel_version.c (see dependencies section)
+
+Now the rpm building process can be started by executing
+
+	rpmbuild -tb sysload-X.Y.Z.tar.gz
+
+If this fails, move all the files to your rpm building directory 
+(something like /usr/src/rpm/SOURCES/), extract the sysload.spec 
+file from the System Loader archive and execute 
+
+	rpmbuild -bb sysload.spec
+
+Read the last few lines of the output carefully to determine where 
+the RPMs were written to. If no error occurred, there will be 
+something like 
+
+	Wrote: /usr/src/rpm/RPMS/<arch>/sysload-X.X.<arch>.rpm
+
+If there is any trouble building the RPM please refer to 
+
+	http://www.ibm.com/developerworks/library/l-rpm1/
+	http://www.ibm.com/developerworks/library/l-rpm2/
+
+(The command is `rpmbuild' now, not `rpm'. Besides this, the HOWTO 
+is very straight forward and very helpful.)
+
+
+
+3. Install System Loader
+========================
+If System Loader was built manually as described above, it can be 
+installed with the make target `install' and removed again with the 
+target `uninstall'.
+
+A rpm package can be installed with 
+
+	rpm -i sysload-X.X.rpm
+
+or via `alien' on a non-rpm system like Debian
+
+	alien -i sysload-X.X.rpm
+
+
+
+4. Setup System Loader
+======================
+To actually use System Loader, there are a few things left to do. 
+For all configuration files that need adjustment, there are examples 
+provided by System Loader which can be found next to the 
+documentation in the doc/ directory or in 
+
+	/usr/share/doc/sysload/
+
+if System Loader has been installed properly.
+
+
+4.1 Create a ramdisk
+--------------------
+sysload_admin is the administration tool which allows to administer 
+ramdisks needed by System Loader. The following tools need to be 
+available for sysload_admin to run:
+
+	* perl
+	* cpio
+	* rsync
+	* get_kernel_version
+	* libssh.o
+
+If System Loader was installed via an RPM, the last two dependencies 
+are fulfilled automatically.
+
+To create a ramdisk, there needs to be a system and distribution 
+specific sysload_admin.conf file (default location is /etc/). Because
+this config tends to differ for every system and for every
+distribution, the installation process puts only an empty config file
+to /etc. More complete config files are provided as examples.
+
+After the config file has been adjusted (or an example has been 
+copied to /etc/sysload_admin.conf), a ramdisk can be created by 
+running sysload_admin:
+
+	sysload_admin local
+
+
+4.2 Configure System Loader
+---------------------------
+To tell System Loader what should be displayed as a boot menu, there 
+needs to be a System Loader configuration file (sysload.conf). There 
+are multiple examples for this too. Start with a basic boot menu to 
+check whether System Loader is working. 
+
+
+4.3 Adjust first stage boot loader
+----------------------------------
+System Loader needs to be initialized by a system specific first 
+stage boot loader like `lilo', `grub' oder `zipl'. Again, there are 
+multiple examples which should explain what is needed. The most 
+important part is, that there needs to be a kernel parameter telling 
+System Loader where it can find its configuration file, for example 
+
+	sysload=block://(/dev/hda2,ext3)/boot/sysload.conf
+
+Also, the kernel might need some modules to access the configuration 
+file in the first place so you need to add a second parameter to the 
+kernel parameters. For example, on SLES10 on i386, the following 
+modules are required to access an IDE disk
+
+	kset=mod(ide-disk),mod(piix)
+
+Obviously, these modules need to be in the ramdisk. See section 5.1
+
+Remember that some boot loader (like `lilo' or `zipl') need to be 
+reinitialized after the config file has been changed.
+
+
+
+5. Start using System Loader
+============================
+If all was done right, the system specific boot loader should display
+a boot entry for System Loader during the next reboot. If System 
+Loader has been configured properly, it should boot into the ramdisk 
+environment and display the boot menu.
+
+
+
+6. Known Issues
+===============
+Depending on the used distribution and on the existing knowledge 
+about kernel modules, it can be rather difficult to identify the 
+modules needed to access a specific resource (e.g. IDE disks) from 
+within the ramdisk. To identify the required modules, change the
+sysload_admin.conf so it puts the sysload.conf as well as all 
+available kernel modules into the ramdisk. After this, System 
+Loader can be started without any modules and the config file 
+contained in its ramdisk
+
+	sysload=file:///path/in/ramdisk/sysload.conf
+
+Once System Loader is running, modules can be added from the shell 
+to find the required ones.

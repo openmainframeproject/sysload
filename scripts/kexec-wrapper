@@ -1,0 +1,62 @@
+#!/bin/sh
+
+#
+# Copyright IBM Corp. 2006, 2008
+#
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+
+# Translate the kexec syntax to the xc_kexec syntax.
+# This allows to use the Xen xc_kexec instead of usual kexec.
+
+# especially:
+# for       kexec -e
+# call      xc_kexec -e
+# and for   kexec --initrd=myinitrd --command-line=mycmdline mykernel
+# call      xc_kexec -l -i myinitrd -c mycmdline -k mykernel
+
+# Note: initrd and command line are optional
+
+#
+# $Id: kexec-wrapper,v 1.2 2008/05/16 07:35:53 schmichr Exp $
+#
+# Author(s): Christof Schmitt <christof.schmitt@de.ibm.com>
+#
+
+echo Being called as: $0 $@
+
+if [ "$1" = -e ]; then
+        echo exec xc_kexec -e
+       exec xc_kexec -e
+       exit
+fi
+
+while [ $# -gt 0 ]; do
+    if $(echo $1 | grep -q -- --initrd=); then
+       INITRD=$( echo $1 | awk '{ sub(/--initrd=/, ""); print }');
+    fi
+
+    if $(echo $1 | grep -q -- --command-line=); then
+       CMDLINE=$( echo $1 | awk '{ sub(/--command-line=/, ""); print }');
+    fi
+
+    LAST=$1
+    shift
+done
+
+KERNEL=$LAST
+
+CMD='xc_kexec -l'
+CMD="$CMD -k $KERNEL"
+
+if [ ! -z $INITRD ]; then
+    CMD="$CMD -i $INITRD"
+fi
+if [ ! -z $CMDLINE ]; then
+    CMD="$CMD -c $CMDLINE"
+fi
+
+echo exec $CMD
+exec $CMD

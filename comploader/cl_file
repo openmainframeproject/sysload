@@ -1,0 +1,80 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2005, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# cl_file
+#
+# sysload component loader module for file URI scheme: access files stored on
+# a local filesystem.
+#
+# URI structure:
+# file:///<path to file>
+#
+# path to file: path within local filesystem to access requested file
+#
+# Author(s): Ralph Wuerthner (rwuerthn@de.ibm.com)
+#
+# $Id: cl_file,v 1.2 2008/05/16 07:35:52 schmichr Exp $
+#
+
+# extract expression from string
+extract()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# return remains after removing expression from string
+remains()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" '{ match($0, RE); print substr($0, RSTART+RLENGTH) }' \
+	2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    fi
+}
+
+
+# check command line arguments
+if [ $# -ne 2 ] ; then
+    echo "Invalid number of arguments." >&2
+    exit 1
+fi
+DESTINATION=$1
+URI=$2
+
+# extract URI components
+URI_SCHEME=$( extract '^(([^:/?#]+):)?' "$URI" | extract '^([^:/?#]+)' )
+REMAINS=$( remains '^(([^:/?#]+):)?' "$URI" )
+URI_AUTHORITY=$( extract '^(//([^/?#]*))?' "$REMAINS" | cut -c 3- )
+REMAINS=$( remains '^(//([^/?#]*))?' "$REMAINS" )
+URI_PATH=$( extract '^([^?#]*)' "$REMAINS" )
+REMAINS=$( remains '^([^?#]*)' "$REMAINS" )
+URI_QUERY=$( extract '^(\?([^#]*))?' "$REMAINS" )
+REMAINS=$( remains '^(\?([^#]*))?' "$REMAINS" )
+URI_FRAGMENT=$( extract '^(#(.*))' "$REMAINS" )
+
+if [ -n "$URI_AUTHORITY" -o -n "$URI_QUERY" -o -n "$URI_FRAGMENT" ] ; then
+    echo "Invalid URI." >&2
+    exit 1
+fi
+if [ ! -r "$URI_PATH" ] ; then
+    echo "No such file." >&2
+    exit 1
+fi
+MSG=$( /bin/cp "$URI_PATH" "$DESTINATION" 2>&1 )
+if [ $? -ne 0 ] ; then
+    echo $MSG >&2
+    exit 1
+fi

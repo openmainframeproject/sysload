@@ -1,0 +1,69 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2005, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# cl_shell_template
+#
+# Template for writing sysload component loader modules shell scripts
+#
+# Author(s): Ralph Wuerthner (rwuerthn@de.ibm.com)
+#
+# $Id: cl_shell_template,v 1.2 2008/05/16 07:35:52 schmichr Exp $
+#
+
+# extract expression from string
+extract()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# return remains after removing expression from string
+remains()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    fi
+}
+
+
+# check command line arguments
+if [ $# -ne 2 ] ; then
+    echo "Invalid number of arguments." >&2
+    exit 1
+fi
+DESTINATION=$1
+URI=$2
+
+# extract URI components
+URI_SCHEME=$( extract '^(([^:/?#]+):)?' "$URI" | extract '^([^:/?#]+)' )
+REMAINS=$( remains '^(([^:/?#]+):)?' "$URI" )
+URI_AUTHORITY=$( extract '^(//([^/?#]*))?' "$REMAINS" | cut -c 3- )
+REMAINS=$( remains '^(//([^/?#]*))?' "$REMAINS" )
+URI_PATH=$( extract '^([^?#]*)' "$REMAINS" )
+REMAINS=$( remains '^([^?#]*)' "$REMAINS" )
+URI_QUERY=$( extract '^(\?([^#]*))?' "$REMAINS"  | cut -c 2- )
+REMAINS=$( remains '^(\?([^#]*))?' "$REMAINS" )
+URI_FRAGMENT=$( extract '^(#(.*))' "$REMAINS" | cut -c 2- )
+
+echo "URI structure:"
+echo "  Scheme:    $URI_SCHEME"
+echo "  Authority: $URI_AUTHORITY"
+echo "  Path:      $URI_PATH"
+echo "  Query:     $URI_QUERY"
+echo "  Fragment:  $URI_FRAGMENT"
+
+# do whatever has to be done with above URI components...

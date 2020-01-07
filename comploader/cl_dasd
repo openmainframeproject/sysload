@@ -1,0 +1,171 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2005, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# cl_dasd
+#
+# sysload component loader module for dasd URI scheme: access files stored on
+# DASD devices attached via a zSeries channel subsystem.
+#
+# URI structure:
+# dasd://(<bus id>[,<partition>[,<filesystem type>]])/<path to file>
+#
+# bus id: device id of DASD to be accessed
+# partition: partition id on DASD, empty or '0' for whole DASD,
+#            '1' for 1st partition, ...
+# filesystem type: optional filesystem type if autodetection doesn't work
+# path to file: path within filesystem to access requested file
+#
+# Example: dasd://(0.0.5e89,1,)/boot/vmlinux-2.6.4
+#
+# Author(s): Ralph Wuerthner (rwuerthn@de.ibm.com)
+#            Christof Schmitt (christof.schmitt@de.ibm.com)
+#
+# $Id: cl_dasd,v 1.2 2008/05/16 07:35:52 schmichr Exp $
+#
+
+wait_for_devices()
+{
+    if [ -x /sbin/udevsettle ]; then
+	/sbin/udevsettle
+    else
+	/sbin/udevstart
+    fi
+}
+
+MOUNT_DIRECTORY=/var/sysload
+PATH=/bin:/sbin:/usr/bin
+
+# extract expression from string
+extract()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# return remains after removing expression from string
+remains()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# cleanup - unregister DASD device
+cleanup()
+{
+    umount $MOUNT_DIRECTORY/$$ > /dev/null 2>&1
+    rmdir $MOUNT_DIRECTORY/$$ > /dev/null 2>&1
+    if [ -n "$SET_DASD_OFFLINE" ] ; then
+	echo 0 > /sys/bus/ccw/devices/$BUS_ID/online
+	usleep 100000
+    fi
+}
+
+
+# check command line arguments
+if [ $# -ne 2 ] ; then
+    echo "Invalid number of arguments." >&2
+    exit 1
+fi
+DESTINATION=$1
+URI=$2
+
+# extract URI components
+URI_SCHEME=$( extract '^(([^:/?#]+):)?' "$URI" | extract '^([^:/?#]+)' )
+REMAINS=$( remains '^(([^:/?#]+):)?' "$URI" )
+URI_AUTHORITY=$( extract '^(//([^/?#]*))?' "$REMAINS" | cut -c 3- )
+REMAINS=$( remains '^(//([^/?#]*))?' "$REMAINS" )
+URI_PATH=$( extract '^([^?#]*)' "$REMAINS" )
+REMAINS=$( remains '^([^?#]*)' "$REMAINS" )
+URI_QUERY=$( extract '^(\?([^#]*))?' "$REMAINS" )
+REMAINS=$( remains '^(\?([^#]*))?' "$REMAINS" )
+URI_FRAGMENT=$( extract '^(#(.*))' "$REMAINS" )
+
+# some sanity checks
+if [ -n "$URI_QUERY" -o -n "$URI_FRAGMENT" ] ; then
+    echo "Invalid URI." >&2
+    exit 1
+fi
+
+if [ -z "$( echo "$URI_AUTHORITY" | egrep \
+    '^\([[:xdigit:]]\.[[:xdigit:]]\.[[:xdigit:]]{4}(,[0-3]?(,.+)?)?\)' )" ]
+then
+    echo "Invalid DASD address." >&2
+    exit 1
+fi
+
+# split authority
+BUS_ID=$( extract '^\\([[:xdigit:]]\.[[:xdigit:]]\.[[:xdigit:]]*' \
+	"$URI_AUTHORITY" | tr A-Z a-z | cut -c 2- )
+REMAINS=$( remains '^\\([[:xdigit:]]\.[[:xdigit:]]\.[[:xdigit:]]*' \
+	"$URI_AUTHORITY" )
+PARTITION=$( extract '^,[0-3]?' "$REMAINS" | cut -c 2- )
+FS=$( remains '^,[0-3]?,?' "$REMAINS" | extract '[^)]*' )
+if [ "$PARTITION" = "0" ] ; then
+    PARTITION=
+fi
+
+# set DASD online
+SYSPATH=/sys/bus/ccw/devices/$BUS_ID
+if [ ! -d $SYSPATH ] ; then
+    echo "No such channel device $BUS_ID." >&2
+    exit 1
+fi
+
+if [ "$( cat $SYSPATH/online )" != 1 ] ; then
+    echo 1 > $SYSPATH/online
+    usleep 500000
+    if [ "$( cat $SYSPATH/online )" != 1 ] ; then
+	echo "Unable to set channel device $BUS_ID online." >&2
+	exit 1
+    fi
+    SET_DASD_OFFLINE=true
+fi
+
+wait_for_devices
+
+DEV=/dev/$( basename $( readlink $SYSPATH/block* ) )$PARTITION
+
+# mount source filesystem
+mkdir -p $MOUNT_DIRECTORY/$$
+if [ -n "$FS" ] ; then
+    mount -o ro -t "$FS" $DEV $MOUNT_DIRECTORY/$$
+else
+    mount -o ro $DEV $MOUNT_DIRECTORY/$$
+fi
+if [ $? -ne 0 ] ; then
+    echo "Error mounting filesystem." >&2
+    cleanup
+    exit 1
+fi
+if [ ! -r "$MOUNT_DIRECTORY/$$/$URI_PATH" ] ; then
+    echo "No such file." >&2
+    cleanup
+    exit 1
+fi
+
+# copy file
+MSG=$( cp "$MOUNT_DIRECTORY/$$/$URI_PATH" "$DESTINATION" 2>&1 )
+if [ $? -ne 0 ] ; then
+    echo $MSG >&2
+    cleanup
+    exit 1
+fi
+
+cleanup
+
+exit 0

@@ -1,0 +1,307 @@
+/* grammar for the sysload config file          */
+/* Note: include will be handled by the scanner */
+
+/* 
+ * a system loader config file is a list of definitions
+ *
+ * T_KNET and T_KSET are short forms to setup devices and
+ * network on the kernel command line
+ */
+
+input: 
+
+  deflist
+  | T_KNET '=' knet_params
+  | T_KSET '=' kset_paramlist
+;
+
+kset_paramlist:
+
+    kset_param
+  | kset_paramlist ',' kset_param
+;
+
+kset_param:
+
+    T_DASD '(' T_BUSIDVAL ')'
+  | T_QETH '(' T_BUSIDVAL ',' T_BUSIDVAL ',' T_BUSIDVAL ')'
+  | T_ZFCP '(' T_BUSIDVAL ',' T_HEXNUM ',' T_HEXNUM ')'
+  | T_DHCP '(' net_rest ')'
+  | T_STATIC '(' net_rest ')'  
+  | T_MOD '(' T_IDENT ')'
+;
+
+net_rest:
+
+    T_IDENT addr_rest
+;
+
+addr_rest:
+
+    /* empty */
+  | ',' T_IPADDR mask_rest
+;
+
+knet_params:
+
+    T_DHCP   ',' T_IDENT
+  | T_STATIC ',' T_IDENT ',' T_IPADDR mask_rest
+;
+
+mask_rest:
+
+    /* empty */
+  | ',' T_IPADDR gateway_rest
+;
+
+gateway_rest:
+
+    /* empty */
+  | ',' T_IPADDR nameserver_rest
+;
+
+nameserver_rest:
+
+    /* empty */
+  | ',' T_IPADDR
+;
+
+deflist:   
+
+    def
+  | deflist def
+;
+
+
+/* 
+ * possible definition types are: 
+ * global definitions, boot entries or a list of system dependent definitions
+ */
+
+def:
+
+    globaldef
+  | bootentry
+  | system '{' deflist '}'
+  | system '{' '}' /* handle include in inactive system section */
+;
+
+globaldef:   
+
+    T_DEFAULT T_STRING
+  | T_TIMEOUT T_NUMBER
+  | T_PASSWORD T_STRING
+  | setup
+  | network
+  | userinterface
+  | exec
+;
+
+
+/*
+ * the setup statements can be used to load modules
+ * and to set dasd, qeth and zfcp devices online
+ */
+
+setup:   
+
+    setup_module
+  | setup_dasd
+  | setup_qeth
+  | setup_zfcp
+;
+
+setup_module:
+
+  T_SETUP T_MODULE '{' modparamlist '}'
+;
+
+modparamlist:   
+
+    modparam
+  | modparamlist modparam
+;
+
+modparam:   
+
+    T_NAME T_STRING
+  | T_PARAM T_STRING
+  | T_KERNELVERSION T_STRING
+  | system '{' modparamlist '}'
+;
+
+setup_dasd: 
+
+  T_SETUP T_DASD '{' T_BUSID T_BUSIDVAL '}'
+;
+
+setup_qeth: 
+
+  T_SETUP T_QETH '{'
+        T_BUSID T_BUSIDVAL 
+        T_BUSID T_BUSIDVAL 
+        T_BUSID T_BUSIDVAL 
+  '}'
+;
+
+setup_zfcp: 
+
+  T_SETUP T_ZFCP '{' 
+        T_BUSID T_BUSIDVAL 
+        T_WWPN  T_HEXNUM 
+        T_LUN   T_HEXNUM 
+  '}'
+;
+
+
+/*
+ * network setup can be specified with a variety of parameters.
+ * parameters can be dependent from a system statement.
+ */
+
+network: 
+
+  T_SETUP T_NETWORK '{' netparamlist '}'
+;
+
+netparamlist:   
+
+    netparam
+  | netparamlist netparam
+;
+
+netparam:   
+
+    T_MODE T_STATIC
+  | T_MODE T_DHCP
+  | T_ADDRESS T_IPADDR
+  | T_MASK T_IPADDR
+  | T_GATEWAY T_IPADDR
+  | T_NAMESERVER T_IPADDR
+  | T_INTERFACE T_IDENT
+  | system '{' netparamlist '}'
+;
+
+
+/*
+ * the start of userinterfaces can be defined via an identifier that
+ * specifies the ui. the rest of the line will be given to the specific
+ * ui module as a parameter line. the handling of the ssh userinterface is
+ * somewhat special because it has to start another ui inside the ssh.
+ */
+
+userinterface:
+
+    T_USERINTERFACE T_IDENT T_STRING
+  | T_USERINTERFACE T_SSH T_IDENT T_STRING
+;
+
+exec:
+
+  T_EXEC T_STRING
+;
+
+
+/*
+ * bootentries start with the keyword 'boot_entry' and are followed by
+ * a detailed specification in '{' '}'. bootentries will be ignored inside
+ * an inactive 'system' section.
+ */
+
+bootentry:
+
+  T_BOOT_ENTRY '{' becontent '}'
+;
+
+becontent:
+
+  title label optionlist
+;
+
+title: 
+
+  T_TITLE T_STRING
+;
+
+label:
+
+    /* empty */
+  | T_LABEL T_STRING
+;
+
+optionlist:   
+
+    option
+  | optionlist option
+;
+
+
+/*
+ * only specific combinations of options are valid!
+ */
+
+option:   
+
+    T_ROOT uri
+  | T_LOCK
+  | T_PAUSE T_STRING
+  | T_KERNEL T_STRING
+  | T_KERNEL uri
+  | T_INITRD T_STRING
+  | T_INITRD uri
+  | T_CMDLINE T_STRING
+  | T_PARMFILE T_STRING
+  | T_PARMFILE uri
+  | T_INSFILE T_STRING
+  | T_INSFILE uri
+  | T_BOOTMAP T_STRING
+  | T_BOOTMAP uri
+  | T_REBOOT
+  | T_HALT
+  | T_SHELL
+  | T_EXIT
+  | system '{' optionlist '}'
+;
+
+uri:   
+
+   T_URISTART T_STRING
+ | T_URISTART T_URIBRACKET T_STRING
+;
+
+
+/*
+ * the system statement checks if we are on the specified system.
+ * if this is not the case the content of the system bracket will be ignored.
+ */
+
+system:    
+
+  T_SYSTEM systemlist 
+;
+
+systemlist:   
+
+    systemid
+  | systemlist systemid
+  | T_NOT '(' systemlist ')'
+;
+
+systemid:
+
+    T_UUID    '(' T_IDENT ')'
+  | T_MAC     '(' T_MACVAL ')'
+  | vmguest
+  | lpar
+;
+
+vmguest:
+
+    T_VMGUEST '(' T_IDENT ')'
+  | T_VMGUEST '(' T_IDENT ',' T_IDENT ')'
+;
+
+lpar:
+
+    T_LPAR    '(' T_IDENT ')'
+

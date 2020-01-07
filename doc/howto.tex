@@ -1,0 +1,1355 @@
+\documentclass[12pt,a4paper,english]{article}
+\usepackage{sysload}
+\hypersetup{pdftitle={System Loader - HOWTO}}
+
+\begin{document}
+
+\title{\Huge{}System Loader\\HOWTO}
+\author{Michael Löhr and Swen Schillig}
+\date{}
+
+\maketitle
+\begin{center}
+\verb|$Id: howto.tex,v 1.1.1.1 2008/05/15 10:14:55 schmichr Exp $|
+\end{center}
+\thispagestyle{empty}
+\newpage
+
+\thispagestyle{empty}
+\tableofcontents
+\thispagestyle{empty}
+\newpage
+
+\sloppy
+
+
+\section{Overview}
+This document describes the installation and configuration of 
+System Loader. All features and options of the System Loader configuration
+are explained in detail. In addition, the usage of the user interface
+is outlined and example configurations are provided in the appendix.
+
+
+\section{Description}\label{sec:description}
+
+\texttt{System Loader} provides a Linux system as a boot environment. This 
+provides various advantages, which are explained in more detail later:
+\begin{itemize}
+\item no need to reinitialize after kernel update
+\item more comfortable boot menu
+\item network based access to boot menu
+\item network based boot via ftp, http, ssh
+\item possibility for centralized configuration
+\item generic rescue system
+\end{itemize}
+
+
+Started as an extension to the \texttt{kboot} project\footnote{kboot 
+homepage \url{http://kboot.sourceforge.net/}}, System Loader is now a 
+stand-alone project. Like \texttt{kboot} it acts as a second stage boot 
+loader by running in a minimal Linux environment started by a platform 
+specific first stage boot loader. At the start a configuration file is 
+read, the setup is performed according to the configuration data and finally
+the boot selection menu is displayed. Based on the users selection,
+a boot configuration is loaded and the system is reinitialized via
+the \texttt{kexec} system call. As the result the minimal Linux system
+is replaced by the system selected in the boot configuration.
+
+\texttt{System Loader} has been optimized for a different goal than the 
+original \texttt{kboot} environment. \texttt{kboot} tries to provide a compact
+and minimal Linux boot system that will be built and customized for
+the target machine and application. \texttt{System Loader} tries to offer
+a more generic and feature rich Linux boot environment that can be
+provided in a ready to use form, e.g. as a rpm-package but gives up
+the goal to provide a very small boot environment.
+
+
+Since \texttt{System Loader} provides a customizable Linux environment, it 
+can be used in numerous ways:
+
+\begin{enumerate}
+\item \emph{As a comfortable boot loader for systems that offer only a frugal
+first stage boot loader:}
+
+\texttt{System Loader} solves the problem that
+some boot loaders have to be reinitialized whenever a component of
+the boot configuration changes. Examples for this type of boot loaders
+are \texttt{lilo} on the i386 platform or \texttt{zipl} on the s390
+platform. With \texttt{System Loader} these boot loaders will be initialized
+only once to start \texttt{System Loader}. Any further changes to the
+boot configuration will be handled dynamically by \texttt{System Loader}.
+A potentially uncomfortable boot menu like in the case of the \texttt{zipl}
+boot loader is replaced by the more convenient boot selection menu
+of \texttt{System Loader}.
+
+\item \emph{As a boot loader that can be controlled from remote via the
+network:}
+
+Usual boot managers offer their boot selection menu on the local console
+of the system to be booted. Therefore it is necessary to walk to the
+machine or to connect with a special terminal software if anything
+different than the default configuration has to be booted. With 
+\texttt{System Loader} a standard ssh interface allows remote connections 
+while a system is still in its boot phase.
+
+\item \emph{As a boot loader that supports network based boot and centralized 
+boot configurations:}
+
+Typical boot loaders have to be configured locally on the system to
+be booted. If kernel parameters or the kernel itself have to be changed
+on several systems an administrator has to login to all systems in
+order to change the settings or install the kernel. \texttt{System Loader}'s
+ability to access remote files through a network connection together
+with a mechanism that can handle system specific configurations is
+the basis to consolidate the boot configuration for several systems.
+Boot parameters, kernels, ramdisks, etc. can be provided by a centralized
+boot server. Especially in virtualization 
+or cluster environments with many similar systems this allows to manage and 
+change boot configurations very efficiently. The approach helps also to 
+distribute new kernel versions with important bug fixes fast and keeps all 
+systems booting from the same boot server in a consistent state.
+
+\item \emph{As a rescue system that is always available in the boot sequence:}
+
+If the boot of a Linux system fails, a Linux rescue system that allows
+to fix the problem is quite useful. On a system that uses \texttt{System Loader}
+as its boot manager there is already a rescue system installed. From
+the shell environment of \texttt{System Loader} the problem that prevents
+the system from booting can be analyzed and fixed. As soon as the
+problem is solved the system can be booted into normal operation again.
+Special tools and requirements for a customized rescue system can
+be easily integrated into the \texttt{System Loader} ramdisk via the 
+\texttt{sysload\_admin} tool.
+\end{enumerate}
+
+
+
+\section{Building and Installation}
+The README file provided with \texttt{System Loader} describes in 
+detail, how \texttt{System Loader} can be built. 
+
+
+\subsection{Manual Installation}
+\texttt{System Loader} can be easily installed by copying a 
+\texttt{System Loader} RAM disk from another system. Depending on how 
+the first stage boot loader is configured, a special kernel and a 
+\texttt{System Loader} configuration file also need to be copied. It 
+is however possible to use the kernel already existing and to utilize 
+a central configuration file accessible through network as explained 
+later in this document.
+
+Sections \ref{sub:menu.lst-for-grub} and \ref{sub:zipl.conf} show 
+example configurations for \texttt{grub} and \texttt{zipl}.
+In some cases, the first stage boot loader (e.g. \texttt{lilo} or 
+\texttt{zipl}) needs to be reinitialized after the configuration file 
+has been adjusted. 
+
+This installation type will provide an environment which allows using 
+\texttt{System Loader} as a second level boot loader. However, it will 
+not provide any means for modifying the RAM disk. This can be achieved 
+with one of the following installation methods.
+
+
+\subsection{Installing from source}
+It is also easy to install \texttt{System Loader} from source. All 
+Makefiles provide the targets \texttt{install} and \texttt{uninstall}.
+\texttt{install} will install all files necessary for creating and 
+modifying the \texttt{System Loader} RAM disk. \texttt{uninstall} will 
+remove all these files from the system.
+
+However, \texttt{make install} will not initialize the \texttt{System Loader}
+RAM disk. After installing, a \texttt{sysload\_admin.conf} has to be copied 
+to \texttt{/etc} and adjusted to the system and the \texttt{System Loader} 
+administration tool \texttt{sysload\_admin} needs to run to create the 
+required RAM disk. Also, the configuration file of the first stage boot 
+loader needs to be adjusted and the boot loader needs to be reinitialized.
+
+
+\subsection{Installing a RPM}
+It is also possible to install \texttt{System Loader} using a RPM 
+package. A RPM package can be build using the spec file which is provided 
+along with \texttt{System Loader}'s source. A detailed instruction on how 
+to build the package can be found in the README file.
+ 
+RPM packages can be installed with the \texttt{rpm} tool on systems using 
+RPM for package management and with the \texttt{alien} tool an many other 
+systems, using e.g. Debian packages.
+
+
+
+\section{Boot Methods}
+Depending on the hardware platform and the available disk types the
+System Loader supports several boot methods. On the i386 and s390
+platform the system can be booted from a kernel image file. An initial
+ramdisk and a kernel command line or parmfile can be specified together
+with this kernel file. On the s390 platform \texttt{*.ins} files
+or the boot map information written by \texttt{zipl} can be used in
+addition.
+
+In any case the location of kernel, ramdisk, parmfile, insfile or
+boot map will be defined as an URI. Which URI scheme has to be used
+depends on the system platform and available disk. The \texttt{block}
+URI is typically used on the i386 platform. The \texttt{dasd} and
+\texttt{zfcp} URI schemes are specific for the s390 platform. On every
+platform the \texttt{ftp} , \texttt{http} and \texttt{scp} URI schemes
+can be used to boot from the network.
+
+All boot methods and URI schemes will be described in detail in the
+following chapter.
+
+
+
+\section{Elements of the Config File}\label{sec:Elements-of-the}
+The config file for \texttt{System Loader}
+consists of some global definitions which are followed by one or more
+boot entries. External files are always referenced by an URI. A detailed
+description of supported URIs will be given in section \ref{sub:URIs}.
+
+
+\subsection{Global Definitions}
+Preceding the boot entries the System Loader configuration file contains
+a number of definitions that are valid for the whole configuration
+file.
+
+
+\subsubsection{Comments}
+Comments are allowed in the global definitions part of the configuration
+file and in the boot entries. A comment starts with \texttt{\#} and
+ends at the end of the line. Tabs or spaces in front of the \# are
+possible but comments at the end of a line that contains a definition
+are not allowed.
+
+Example:
+\begin{verbatim}
+# this is a comment
+        # this is also a comment
+
+<definition> # this is not allowed!
+\end{verbatim}
+
+
+\subsubsection{\texttt{default}}\label{sub:default}
+The \texttt{default} statement references the boot entry that will
+be selected automatically after the timeout. Valid references are
+the label of a boot entry or a number. Implicit numbering of the boot
+entries starts with 0. If the default statement is not used, entry
+number 0 will be used as the default.
+
+Example:
+\begin{verbatim}
+default linux2
+default 1
+\end{verbatim}
+
+
+\subsubsection{\texttt{timeout}}
+The \texttt{timeout} statement specifies the time in seconds until
+the default boot entry will be started automatically. If the statement
+is not used or the timeout is set to 0 no timeout will occur.
+
+Example:
+\begin{verbatim}
+timeout 15
+\end{verbatim}
+
+
+\subsubsection{\texttt{password}}\label{sub:password}
+The \texttt{password} statement defines the password that has to be
+entered if a locked boot entry (see section \ref{sub:lock}) has been
+selected.
+
+Example:
+\begin{verbatim}
+password topsecret
+\end{verbatim}
+
+
+\subsubsection{\texttt{userinterface}}
+The \texttt{userinterface} statement specifies which userinterface
+module should be started to display the boot selection menu. For every
+userinterface command a userinterface process will be started. This
+allows to start several instances of the same userinterface module
+listening on different input devices or ports. Additional options
+may be specified depending on the user interface module. Currently
+\texttt{linemode} and ssh are available as user interface modules.
+
+Syntax:
+\begin{verbatim}
+userinterface <ui_module_name> [MODULE_OPTIONS]
+\end{verbatim}
+
+
+\subsubsection{\texttt{userinterface linemode}}
+For the linemode interface it is required to specify the device on
+which the boot selection menu will be displayed. Typical values for
+the device parameter are \texttt{/dev/console}, \texttt{/dev/tty}
+or \texttt{/dev/tty1}.
+
+Syntax:
+\begin{verbatim}
+userinterface linemode <device>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+userinterface linemode /dev/tty1
+\end{verbatim}
+
+
+\subsubsection{\texttt{userinterface ssh}}
+The \texttt{userinterface ssh} statement will start a process that
+is listening for incoming ssh connections in the background. For every
+incoming connection that is successfully established a new user interface
+instance will be started. The type of interface to be started has
+to be specified as the first module option. Currently only linemode
+can be specified here but for the future additional user interface
+types (e.g. ncurses) may become available. Additional module options
+may be used to specify the port on which the ssh connection can be
+established and to load RSA or DSS keys from a location defined by
+an URI scheme.
+
+Connecting to System Loader via ssh will require a userid and password. 
+During the creation of the System Loader ramdisk a user \texttt{sysload} 
+with password \texttt{sysload} will be created automatically. The 
+password may be changed with the \texttt{sysload\_admin} tool. 
+
+Syntax:
+\begin{verbatim}
+userinterface ssh <ui_module_name> [port=<portnumber>] \
+                  [rsa_key=<key_uri>] [dss_key=<key_uri>]
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+userinterface ssh linemode port=2222
+\end{verbatim}
+
+
+\subsubsection{\texttt{include}}
+The \texttt{include} statement can be used anywhere in the system
+loader configuration file. The content of the file referenced by the
+URI will be included at the position of the \texttt{include} statement.
+Nested includes are allowed but limited to twenty levels. \texttt{include}
+statements that appear inside an inactive system section will not
+be applied.
+
+Syntax:
+\begin{verbatim}
+include URI
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+include dasd://(0.0.5c5e,1)/boot/extra_menu.conf
+\end{verbatim}
+
+
+\subsubsection{\texttt{exec}}
+The \texttt{exec} statement can be used to execute additional commands
+while the System Loader configuration file is evaluated. The specified
+command is executed immediately. The evaluation of the configuration
+file continues as soon as the specified command returns. \texttt{exec}
+statements that appear inside an inactive system section will not
+execute the specified command.
+
+Syntax:
+\begin{verbatim}
+exec <command>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+exec mdadm --assemble /dev/md0 /dev/sda2 /dev/sdb2
+exec vgscan
+exec vgchange -a y
+\end{verbatim}
+
+
+
+\subsection{Setup Commands}
+This group of commands allows to setup additional devices in the minimal
+Linux environment of the System Loader. It is possible to load additional
+kernel modules, to specify network settings and to enable devices
+that are not enabled automatically. Each \texttt{setup} command is
+executed immediately. As parameters are identified by keywords they
+are not required to appear in any particular order. An additional
+short form allows to use \texttt{setup} commands on the kernel command
+line.
+
+Syntax:
+\begin{verbatim}
+setup <setup_item> { 
+  <paramlist> 
+}
+\end{verbatim}
+
+
+\subsubsection{\texttt{setup module}}
+The \texttt{setup module} command allows to load additional kernel
+modules. Module dependencies are resolved automatically. The module
+to be loaded has to be present on the System Loader ramdisk. Modules
+can be added to an existing ramdisk via the sysload\_admin tool.
+
+Syntax:
+\begin{verbatim}
+setup module {
+  name          <name>
+  param         <param>
+  kernelversion <kernelversion>
+}
+\end{verbatim}
+
+Short form:
+\begin{verbatim}
+mod(<name>[,<param>[,<kernelversion>]])
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+setup module {
+  name qeth
+}
+\end{verbatim}
+
+
+\subsubsection{\texttt{setup network}}
+The \texttt{setup network} command allows to specify network settings
+and to initialize a network device with these settings. Static setup
+and dhcp are supported. Parameters for static network setup can also
+be used in dhcp mode and are used as fallback if dhcp fails. A correct
+network setup is required to use network based URI schemes like ftp,
+http and scp. A \texttt{setup module} command may be required to load
+the network device driver before the \texttt{setup network} command
+can be executed successfully. The \texttt{sysload\_admin} tool can be
+used to copy the required driver modules into the ramdisk of the system
+loader.
+
+Syntax:
+\begin{verbatim}
+setup network {
+  interface  <interface>
+  mode       <dhcp_or_static>
+  address    <address>
+  mask       <mask>
+  gateway    <gateway>
+  nameserver <nameserver>
+}
+\end{verbatim}
+
+Short form:
+\begin{verbatim}
+static(<interface>[,<address>[,<mask>[,<gateway>[,<nameserver>]]]])
+dhcp(<interface>[,<address>[,<mask>[,<gateway>[,<nameserver>]]]])
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+setup network {
+  interface  eth0
+  mode       dhcp
+  address    9.155.23.65
+  mask       255.255.255.128
+  gateway    9.155.23.1
+  nameserver 9.64.163.21
+}
+\end{verbatim}
+
+
+\subsubsection{\texttt{setup qeth}}
+On the s390 platform the \texttt{setup qeth} command can be used to
+enable a qeth Ethernet device with the given busids.
+
+Syntax:
+\begin{verbatim}
+setup qeth {
+  busid  <busid>
+  busid  <busid>
+  busid  <busid>
+}
+\end{verbatim}
+
+Short form:
+\begin{verbatim}
+qeth(<busid>,<busid>,<busid>)
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+setup qeth {
+  busid 0.0.f5de
+  busid 0.0.f5df
+  busid 0.0.f5e0
+}
+\end{verbatim}
+
+
+\subsubsection{\texttt{setup dasd}}
+On the s390 platform the \texttt{setup dasd} command can be used to
+enable a dasd disk device with the given busid.
+
+Syntax:
+\begin{verbatim}
+setup dasd {
+  busid  <busid>
+}
+\end{verbatim}
+
+Short form:
+\begin{verbatim}
+dasd(<busid>)
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+setup dasd {
+  busid 0.0.5c60
+}
+\end{verbatim}
+
+
+\subsubsection{\texttt{setup zfcp}}
+On the s390 platform the \texttt{setup zfcp} command can be used to
+enable a zfcp disk device.
+
+Syntax:
+\begin{verbatim}
+setup zfcp {
+  busid  <busid>
+  wwpn   <wwpn>
+  lun    <lun>
+}
+\end{verbatim}
+
+Short form:
+\begin{verbatim}
+zfcp(<busid>,<wwpn>,<lun>)
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+setup zfcp {
+  busid 0.0.54ae
+  wwpn  0x5005076300cb93cb
+  lun   0x512e000000000000
+}
+\end{verbatim}
+
+
+
+\subsection{System Dependent Sections}
+Based on the network capabilities of System Loader it is possible
+to provide kernels, ramdisks and kernel parameters on a centralized
+bootserver. System dependent sections in the System Loader configuration
+file provide a mechanism that is especially useful for shared system
+loader configuration files. A system dependent section starts with
+a test, that determines if the configuration part is active on a specific
+system. Depending on the result of this test the following section
+is used or ignored. The identification of the system can be done via
+the MAC address of a network adapter, the UUID of the system, the
+name of the virtual machine or the name of the logical partition of
+the host system. A system dependent section is active if at least
+one of the system identifiers matches. If a system identifier is not
+available on the specific system it will never match. System dependent
+sections can be nested in order to specify settings that are common
+to a number of systems and to be able to change only some details
+for the specific system.
+
+Syntax:
+
+\begin{verbatim}
+system <systemidlist> {
+  <definitionlist>
+}
+\end{verbatim}
+
+Examples:
+\begin{verbatim}
+system mac(00:10:C6:DE:12:6C) 
+       uuid(C7CCA781-2DD5-11C6-93BC-AD439DC0988B)
+{
+  root block://(/dev/hda5,ext3)/boot/
+}
+
+system not(vmguest(linux41)) {
+  include ftp://sysload:sysload@53v15g41.ibm.com/boot/standard\_entries.conf
+}
+
+system vmguest(linux40,g53lp15)
+       vmguest(linux41,g53lp15)
+{
+  setup network {
+    mode static
+
+    vmguest(linux40) {
+      address   9.152.26.120
+    }
+
+    vmguest(linux41) {
+      address   9.152.26.121
+    }
+
+    mask    255.255.252.0
+    gateway 9.152.24.1
+    nameserver 9.152.120.241
+    interface eth0
+  }
+}
+\end{verbatim}
+
+
+\subsubsection{\texttt{mac}}
+The mac systemidentifier can be used on nearly every system that has
+a network adapter. The mac statement matches if the system has a network
+adapter with this mac address. It may be necessary to load a kernel
+module and to enable the network device before the MAC of the system
+can be determined. Therefore it is not the preferred method to identify
+a system via its mac. Nevertheless it is the only available method
+for older machines on the i386 platform.
+
+
+\subsubsection{\texttt{uuid}}
+On the i386 platform recent BIOS versions provide a UUID that allows
+to identify the specific system unambiguously. The \texttt{uuid} command
+matches when the given UUID matches the UUID of the system. If available
+this is the preferred method to identify a specific system on the
+i386 platform.
+
+
+\subsubsection{\texttt{lpar}}
+The concept of logical partitions allows to split the hardware of
+a computer system into several independent parts. Each part or logical
+partition can boot its own operating system. The \texttt{lpar} system
+identifier allows to identify the logical partition on which the system
+loader configuration file is currently used and matches when the given
+name matches the name of the current logical partition. In the system
+loader it is implemented for the s390 platform. In the future it could
+be extended to other platforms that offer logical partitions. The
+name of the lpar is read from \texttt{/proc/sysinfo.}
+
+Syntax:
+\begin{verbatim}
+lpar(lparname)
+\end{verbatim}
+
+
+\subsubsection{\texttt{vmguest}}
+The concept of virtual machines is an approach that allows to run
+several instances of operating systems under the control of a virtualization
+software. The \texttt{vmguest} system identifier allows to identify
+the virtual machine on which a System Loader configuration file is
+currently used. It matches when the given name matches the name of
+the virtual machine. An extended form allows to specify the name of
+a logical partition in addition and matches when the name of the virtual
+machine and the name of the logical partition are identical to the
+given parameter values. The \texttt{vmguest} system identifier is
+implemented for VM on the the s390 platform. In the future it could
+be extended to other environments that offer virtual machines. The
+names of the vmguest and of the lpar are read from \texttt{/proc/sysinfo.}
+
+Syntax:
+\begin{verbatim}
+vmguest(vmguestname)
+\end{verbatim}
+
+or
+\begin{verbatim}
+vmguest(vmguestname, lparname)
+\end{verbatim}
+
+
+
+\subsection{Boot Entry Definitions}
+The global definitions are followed by a section of boot entries which
+describe the available boot configurations. A boot entry starts with
+the line
+
+\begin{verbatim}
+boot_entry {
+\end{verbatim}
+and ends with a closing bracket
+\begin{verbatim}
+}
+\end{verbatim}
+
+Every boot entry must contain exactly one statement that triggers
+a boot action. These boot action statements are \texttt{kernel}, \texttt{insfile},
+\texttt{bootmap}, \texttt{halt}, \texttt{reboot} and \texttt{shell}.
+Other statements can be used optionally. Some of them will specify
+labels or variables to improve the handling of the configuration file,
+some will influence the behaviour of the boot menu and some will pass
+additional information to the booted system. All possible statements
+inside the boot entry are described in the following sections.
+
+The length of the complete boot entry can not exceed the maximum string 
+length which is set to 512 characters by default. There is a global 
+parameter which sets the string length in \texttt{config.h}.
+
+\subsubsection{\texttt{title}}
+The \texttt{title} statement defines a text that will be displayed
+in the boot selection menu and should give some meaningful description
+of the boot configuration. This statement is mandatory for all boot
+entries.
+
+Example:
+\begin{verbatim}
+title Debian GNU/Linux, latest kernel
+\end{verbatim}
+
+
+\subsubsection{\texttt{label}}
+The \texttt{label} statement allows to assign a symbolic label to
+a boot entry. This label can be used in the default statement to reference
+the default boot entry (see section \ref{sub:default}). If no label
+definition is present the boot entry can still be referenced numerically
+by its position in the configuration file.
+
+Example:
+\begin{verbatim}
+label linux3
+\end{verbatim}
+
+
+\subsubsection{\texttt{root}}
+The \texttt{root} statement defines an URI path prefix and will be
+prepended to all URIs%
+\footnote{The root definition will not be applied to \texttt{bootmap} URIs because
+a path definition makes no sense for a structure that is not part
+of any filesystem.%
+} specified in the same boot entry. Typically it is used to specify
+a common path for kernel, initrd and parmfile. Note that the path
+prefix and the rest of the URI will be concatenated as they are specified.
+There is no automatic insertion of a \texttt{'/'} character and no
+syntax checking.
+
+Example:
+\begin{verbatim}
+root dasd://(0.0.5c5e,1)/boot/
+\end{verbatim}
+
+
+\subsubsection{\texttt{kernel}}
+The \texttt{kernel} statement specifies the kernel file that will
+be booted if this boot entry is selected. All supported URI formats
+are allowed to specify the location of the kernel file. If a root
+statement is given in the same boot entry, it will be prepended to
+the specified kernel path.
+
+Example:
+\begin{verbatim}
+kernel vmlinuz
+\end{verbatim}
+
+
+\subsubsection{\texttt{initrd}}
+The \texttt{initrd} statement specifies the initial ramdisk that will
+be used if this boot entry is selected. All supported URI formats
+are allowed to specify the location of the ramdisk file. If a root
+statement is given in the same boot entry, it will be prepended to
+the specified ramdisk path.
+
+Example:
+\begin{verbatim}
+initrd initrd.img
+\end{verbatim}
+
+\subsubsection{\texttt{cmdline}}
+The cmdline statement specifies the kernel commandline that is used
+to start the kernel if this boot entry is selected.
+
+Example:
+\begin{verbatim}
+cmdline ro root=/dev/ram0 ramdisk_size=100000
+\end{verbatim}
+
+
+\subsubsection{\texttt{parmfile}}
+As an alternative to the cmdline statement the \texttt{parmfile} statement
+can be used to specify the file that will be used as the kernel command
+line if this boot entry is selected. All supported URI formats are
+allowed to specify the location of the parmfile. If a root statement
+is given in the same boot entry, it will be prepended to the specified
+parmfile path. If parmfile and cmdline are specified at the same time
+they will be concatenated as \texttt{parmfile} + \texttt{' '} + \texttt{cmdline}.
+
+Example:
+\begin{verbatim}
+parmfile parmfile.txt
+\end{verbatim}
+
+
+\subsubsection{\texttt{lock}}\label{sub:lock}
+The \texttt{lock} command allows to have password protected boot entries.
+If a locked boot entry is selected the user has to enter the password
+specified in the \texttt{password} statement (see section \ref{sub:password})
+to execute this boot selection entry.
+
+Example:
+\begin{verbatim}
+lock
+\end{verbatim}
+
+
+\subsubsection{\texttt{pause}}
+The \texttt{pause} statement displays a message and waits for user
+input before the boot entry will be started. This can be used to ask
+the user to prepare the system for booting (e.g. by inserting a boot
+CD to the CD drive).
+
+Example:
+\begin{verbatim}
+pause Please insert your boot floppy!
+\end{verbatim}
+
+
+\subsubsection{\texttt{insfile}}
+The \texttt{insfile} statement can be used as an alternative method
+to specify a boot configuration. An \texttt{*.ins} file
+contains the definitions of a kernel, initial ramdisk and parmfile,
+therefore it makes no sense to specify these components . The \texttt{insfile}
+statement is only available on the s390 platform and is provided with
+several Linux distributions for this platform.
+
+Example:
+\begin{verbatim}
+insfile dasd://(0.0.5c5e,1)/usr/local/insfile_test/redhat/generic.ins
+\end{verbatim}
+
+
+\subsubsection{\texttt{bootmap}}\label{sub:bootmap}
+The \texttt{bootmap} command can be used as an alternative method
+to specify a boot configuration. It is only available on the s390
+platform and boots the system using the boot information from the
+boot map of the specified disk. This boot information is written by
+the first stage boot loader \texttt{zipl}. Only bootmaps in the format 
+created by \texttt{zipl} version 1.2 or newer are supported. The 
+bootmap command uses a modified URI format that is described in 
+section \ref{sub:dasd-URI-for} and \ref{sub:zfcp-URI-for}.
+
+Example:
+\begin{verbatim}
+bootmap dasd://(0.0.5e2a,0)
+\end{verbatim}
+
+
+\subsubsection{\texttt{halt}}
+The \texttt{halt} statement can be used instead of a real boot selection.
+It will halt the Linux environment of the System Loader.
+
+
+\subsubsection{\texttt{reboot}}
+The \texttt{reboot} statement can be used instead of a real boot selection.
+This statement will reboot the system. If a first stage bootloader
+is installed the system will be restarted via this bootloader.
+
+
+\subsubsection{\texttt{shell}\label{sub:shell}}
+The \texttt{shell} statement can be used instead of a real boot selection.
+If the resulting boot entry is selected, the user will get a shell
+prompt. Leaving the shell prompt via exit will redisplay the boot
+selection menu.
+
+
+
+\subsection{URI Definitions}\label{sub:URIs}
+URIs provide a generic mechanism to describe the
+location of files. They are used by System Loader to locate boot
+and configuration files. The following sections describe the supported
+URI schemes in detail.
+
+
+\subsubsection{\texttt{block}}
+The \texttt{block} URI can be used to reference a file on any block
+device containing a supported filesystem. This is the typical method
+to access the boot files on the i386 platform and on other non s390
+platforms. If no filesystem type is specified, the filesystem type
+will be auto detected.
+
+Syntax:
+\begin{verbatim}
+block://(<device node>[,<filesystem type>])/<path to file>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+block://(/dev/hda5,ext3)/boot/vmlinuz
+\end{verbatim}
+
+
+\subsubsection{\texttt{ftp}}\label{sub:URI_ftp}
+The \texttt{ftp} URI can be used to reference a file on a ftp-server.
+This URI type is available on all platforms but requires a network
+connection. If the remote server requires a UID and a password, it
+has to be provided the usual way (see the example below). In case
+the UID contains the ``@'' , as it happens in e-mail addresses,
+it has to be replaced with ``\%40'' to avoid any misunderstanding
+with the separator between the UID:PW combination and the host-name.
+
+Syntax:
+\begin{verbatim}
+ftp://[UID[:PW]@]hostname[:PORT]/<path to file>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+ftp://my_name%40ibm.com:my_secret@ftp.server.com/boot/vmlinuz
+\end{verbatim}
+
+
+\subsubsection{\texttt{http}}\label{sub:URI_http}
+The \texttt{http} URI can be used to reference a file on a http-server.
+This URI type is available on all platforms but requires a network
+connection. If the remote server requires a UID and a password, it
+has to be provided like for the \ref{sub:URI_ftp}ftp URI (see example
+below). In case the UID contains the ``@'' , as it happens in
+e-mail addresses, it has to be replaced with ``\%40'' to avoid
+any misunderstanding with the separator between the UID:PW combination
+and the host-name.
+
+Syntax:
+\begin{verbatim}
+http://[UID[:PW]@]hostname[:PORT]/<path to file>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+http://my_name%40ibm.com:my_secret@http.server.com/boot/vmlinuz
+\end{verbatim}
+
+
+\subsubsection{\texttt{scp}}
+The \texttt{scp} URI can be used to reference a file on a server which
+is accessible via the SSH protocol. As with the \ref{sub:URI_ftp}
+ftp- and the \ref{sub:URI_http} http-URI the scp-URI is available
+on all platforms but requires a network connection. The encoding of
+a UID and a password is identical to the above described protocols
+(see example below). In case the UID contains the ``@'' , as it
+happens in e-mail addresses, it has to be replaced with ``\%40''
+to avoid any misunderstanding with the separator between the UID:PW
+combination and the host-name. Beside the UID:PW combination, encoded
+in the URI, the public key authentication is supported as well. Therefor
+the local public key has to be part of the servers \texttt{authorized\_keys}
+file and the public key authentication has to be enabled on the server.
+
+Syntax:
+\begin{verbatim}
+scp://[UID[:PW]@]hostname[:PORT]/<path to file>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+scp://my_name%40ibm.com:my_secret@ssh.server.com/boot/vmlinuz
+\end{verbatim}
+
+
+\subsubsection{\texttt{file}}
+The \texttt{file} URI can be used to reference files on an already
+mounted filesystem. This type of URI is available on all platforms.
+In an unmodified System Loader boot environment it can only be used
+to reference files on the initial ramdisk. If the System Loader is
+running as a program on an already booted Linux system it can be used
+instead of the other URIs.
+
+Example:
+\begin{verbatim}
+file:///boot/vmlinuz
+\end{verbatim}
+
+
+\subsubsection{\texttt{dasd}}
+The \texttt{dasd} URI can be used to reference files on zSeries ESCON/FICON
+attached storage. This type of URI is only available on the s390 platform.
+If no filesystem type is specified, the filesystem type will be auto detected.
+
+Syntax:
+\begin{verbatim}
+dasd://(<bus id>,[<partition>[,<filesystem type>]])/<path to file>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+dasd://(0.0.5c5e,1)/usr/local/insfile_test/SuSE/suse.ins
+\end{verbatim}
+
+
+\subsubsection{\texttt{zfcp}}
+The zfcp URI can be used to reference files on s390 (zSeries) FCP
+attached storage. This type of URI is only available on the s390 platform.
+If no filesystem type is specified, the filesystem type will be auto detected.
+
+Syntax:
+\begin{verbatim}
+zfcp://(<bus id>,<WWPN>,<LUN>,[<partition>[,<filesystem type>]])/<path to file>
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+zfcp://(0.0.54e0,0x5005076303000104,0x4011400500000000,1)/boot/initrd.img
+\end{verbatim}
+
+
+\subsubsection{\texttt{dasd} URI for the bootmap command}\label{sub:dasd-URI-for}
+Because the bootmap information is not stored inside a file system
+the bootmap command (see section \ref{sub:bootmap}) uses a reduced
+form of the dasd URI.
+
+Syntax:
+\begin{verbatim}
+dasd://(<bus id>[,<program number>])
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+dasd://(0.0.5e89,1)
+\end{verbatim}
+
+
+\subsubsection{\texttt{zfcp} URI for the bootmap command}\label{sub:zfcp-URI-for}
+Because the bootmap information is not stored inside a file system
+the bootmap command (see section \ref{sub:bootmap}) uses a reduced
+form of the zfcp URI.
+
+Syntax:
+\begin{verbatim}
+zfcp://(<bus id>,<WWPN>,<LUN>[,<program number>])
+\end{verbatim}
+
+Example:
+\begin{verbatim}
+zfcp://(0.0.04ae,0x500507630e01fca2,0x4010404500000000,2)
+\end{verbatim}
+
+
+
+\section{Using the Command Line Interface}
+The command line interface is the basic user interface of System
+Loader. It is designed to run on all platforms and without any special
+requirements regarding the capabilities of the user interface device.
+Therefore it will be usable on line mode interfaces like the 3270
+terminal on the s390 platform or via a serial line on typical open
+systems platforms.
+
+The command line interface displays the title information from all
+boot entries found in the System Loader configuration file. The default
+entry is marked by an arrow symbol \texttt{->}, locked entries are
+displayed in brackets \texttt{{[}]}.
+
+\begin{verbatim}
+System Loader user interface is starting. 
+Configuration file source: file:///boot/sysload.conf
+
+Welcome to System Loader!
+
+The following boot options are available:
+-> 1    latest kernel from DASD
+   2    latest kernel from EVMS (matching system)
+   3    rescue kernel from DASD
+   4    System Reboot
+   5    System Halt
+   6    start a shell!
+   d<n> Display boot parameters of the selected entry
+   m<n> Modify and boot selected entry
+   i    Enter boot parameters interactively
+
+Please enter your selection:
+\end{verbatim}
+
+The selection of a specific entry is done by entering its number.
+If the menu is not completely visible it can be redisplayed by entering
+an empty input. If a timeout occurs while one or more user interfaces
+are waiting for input, all user interfaces will be terminated and
+the default entry will be executed. If a timeout is defined it will
+be displayed by the user interface. In addition to the selection of
+predefined menu entries the user interface allows to display existing
+boot entries, to modify them or to enter new entries from scratch.
+
+Entering the boot entry number with prefix \texttt{d} will display
+the associated boot entry like shown in the following example. 
+
+\begin{verbatim}
+d2
+
+*** BOOT ENTRY PRINTOUT ***
+title     latest kernel from EVMS (matching system)
+label     evms
+root      block://(/dev/evms/evmsvol)/boot/
+kernel    vmlinuz
+cmdline   dasd=5c60-5c61 root=/dev/dasda1 ro noinitrd selinux=0
+action    KERNEL_BOOT
+*** Press RETURN to continue ***
+\end{verbatim}
+
+With prefix \texttt{m} the boot entry will first be displayed completely
+and will then be offered line by line to allow the input of modified
+lines. Empty user input will leave the respective line unchanged.
+The modified boot entry will be displayed again and can be booted
+finally.
+
+\begin{verbatim}
+m2
+
+*** BOOT ENTRY PRINTOUT ***
+title     latest kernel from EVMS (matching system)
+label     evms
+root      block://(/dev/evms/evmsvol)/boot/
+kernel    vmlinuz
+cmdline   dasd=5c60-5c61 root=/dev/dasda1 ro noinitrd selinux=0
+action    KERNEL_BOOT
+ 
+*** Please enter the new values for each line ***
+*** or hit ENTER to leave it unchanged.       ***
+root
+kernel    vmlinuz.rescue
+initrd
+cmdline
+parmfile
+ 
+*** BOOT ENTRY PRINTOUT ***
+root      block://(/dev/evms/evmsvol)/boot/
+kernel    vmlinuz.rescue
+cmdline   dasd=5c60-5c61 root=/dev/dasda1 ro noinitrd selinux=0
+action    KERNEL_BOOT
+
+*** Press 'B' to boot this entry or any other key to cancel ***
+\end{verbatim}
+
+The \texttt{i} command allows to enter a boot entry interactively
+from scratch in cases where no similar entry is already present in
+the boot selection menu.
+
+\begin{verbatim}
+i
+
+*** Please enter the values for manual boot ***
+ACTION   => 1->KERNEL_BOOT 2->INSFILE_BOOT 3->BOOTMAP_BOOT
+action    1
+root      block://(/dev/evms/evmsvol)/boot/
+kernel    vmlinuz.rescue
+initrd
+cmdline   dasd=5c60-5c61 root=/dev/dasda1 ro noinitrd selinux=0
+parmfile
+ 
+*** BOOT ENTRY PRINTOUT ***
+root      block://(/dev/evms/evmsvol)/boot/
+kernel    vmlinuz.rescue
+cmdline   dasd=5c60-5c61 root=/dev/dasda1 ro noinitrd selinux=0
+action    KERNEL_BOOT
+ 
+*** Press 'B' to boot this entry or any other key to cancel ***
+\end{verbatim}
+
+
+
+\section{The \texttt{sysload\_admin} Tool}\label{sec:The-sysload_admin-Tool}
+The administration tool was developed to create or modify a ramfs
+to suite all system and user requirements while running the minimal
+system contained within the ramfs. The functionality includes the
+support to add any executable, library or module to the ramfs. In
+addition all dependencies are detected and resolved by adding the
+dependent files to the ramfs.
+
+E.g. if an added executable is dynamically linked and has therefor
+certain library dependencies, this will be detected and the required
+libraries will be copied to the ramfs. 
+
+The same applies for library (e.g. library\_a requires library\_b)
+and module (mod\_a requires mod\_b) dependencies. If modules are added
+to the ramfs the required modules.dep file is generated in the appropriate
+location.
+
+In addition the tool can be used to change the super-users password
+within the ramfs. This functionality is primarily used when the ramfs
+is supporting remote-access while running the minimal system.
+
+The individual settings of the admin tool are configured through a
+configuration file which can be specified by the '-c <file>' command-line
+parameter. The default is /etc/sysload\_admin.conf.
+
+If System Loader was newly installed, this configuration file is effectively 
+empty and sysload\_admin will show errors. Please refer to the system 
+specific example configurations provided by System Loader and adjust them 
+as needed.
+
+In addition the sysload\_admin tool supports the following options and
+commands.
+
+\begin{verbatim}
+Commands:
+  local    create a ramfs based on local source files
+  passwd   change password for super-user ID in -m <ramfs>
+  add      add executables, libraries and/or modules to the ramfs
+
+Options:
+  -h, --help              this help text
+  -V, --version           print version information
+  -c, --config <file>     configuration file name (default /etc/sysload_admin.conf)
+  -m, --master <file>     master ramfs superseding other ramfs' content.
+  -o, --output <file>     file name for the resulting ramfs image
+  -k, --kernel <file>     kernel file name
+  -l, --lib <file>        add DLL(s) <file,...> to ramfs (full qualified path)
+  -d, --module <module>   add module(s) <module,...> to ramfs (e.g. qeth)
+  -x, --executable <file> add executable <file,...> to ramfs (e.g. losetup)
+  -v, --verbose           be verbose
+  -q, --quite             be quite
+\end{verbatim}
+
+Notice: if one or more of the command-line switches \texttt{-l, -m,
+-x} are used, none of the configured file values are used for libraries,
+modules and executables. This means that either the configuration
+file or the command line is used to reference the files which are
+to be added to the ramfs.
+
+To describe the admin tool's functionality best, verify the following
+examples:
+
+\begin{enumerate}
+\item generate a ramfs containing the defaults specified in the configuration
+file. 
+\begin{verbatim}
+sysload_admin local
+\end{verbatim}
+
+\item add the executables ldd and /home/frank/my\_exec to the ramfs /boot/my\_initrd
+and store the resulting ramfs in the default file. 
+\begin{verbatim}
+sysload_admin -m /boot/my_initrd -x ldd,/home/frank/my_exec add
+\end{verbatim}
+
+\item add all executables, libraries and modules specified in the configuration
+file /home/frank/my.conf and store the resulting ramfs in /home/frank/my\_initrd.new.
+\begin{verbatim}
+sysload_admin -f /home/frank/my.conf -o /home/frank/my_initrd.new add
+\end{verbatim}
+
+\item change the super-users password in the ramfs /boot/my\_initrd and
+store the resulting ramfs in the same file.
+\begin{verbatim}
+sysload_admin -m /boot/my_initrd -o /boot/my_initrd passwd
+\end{verbatim}
+\end{enumerate}
+
+
+
+\section{Using Online Documentation}
+Man pages are available for the \texttt{sysload} executable and for
+the System Loader configuration file \texttt{sysload.conf}. These man
+pages are meant as a short overview and refer to this specification
+and to the System Loader design document for a detailed description
+of this software.
+
+There are also man pages for the System Loader admin tool 
+\texttt{sysload\_admin} and its configuration file 
+\texttt{sysload\_admin.conf}.
+
+
+
+\section{Extending the System Loader}
+The System Loader is designed to be extensible. The extension can
+be done without changing the code of the existing components. User
+provided loader modules can provide support for additional URI schemes
+(e.g. nfs, smb). Additional user interface modules can provide more
+comfortable user interfaces (e.g. graphical or web-based). Interface
+definitions are given in the design documents.
+
+
+
+\section{Dependencies}
+It is possible to use the System Loader within any 
+Linux runtime environment. The main dependencies are
+the availability of the kexec system call in the kernel and the kexec
+tool. In addition the current implementation depends on several basic
+Linux tools and programs like \texttt{udev}, \texttt{sh}, \texttt{awk},
+\texttt{mount}, \texttt{umount}, \texttt{mkdir}, \texttt{rmdir}, \texttt{usleep},
+etc.
+
+
+
+\section{Performance Considerations}
+System Loader may slow down the overall boot process because two
+Linux kernels must be loaded until the system is running in its final
+configuration. It is expected that System Loader will be primarily
+used in situations where the flexibility of the boot process as 
+described in section \ref{sec:description} is most important.
+
+
+
+
+\appendix
+
+\section{Examples}
+
+\subsection{\texttt{menu.lst} to start System Loader via \texttt{grub}}
+This example shows how System Loader can be booted on the i386
+platform using grub as the first stage boot loader. Relevant for 
+System Loader is the \texttt{sysload=} parameter in the kernel command
+line which references the System Loader configuration file. The 
+\texttt{quiet} parameter minimizes the screen output while the 
+System Loader environment is started.
+
+\label{sub:menu.lst-for-grub}
+{\scriptsize \verbatiminput{menu.lst}}
+
+
+\subsection{Simple \texttt{sysload.conf} for i386}
+The following example shows a simple System Loader configuration for
+the i386 platform. Two userinterface instances are started to listen
+on two different devices simultaneously.
+
+\label{i386conf}
+{\scriptsize \verbatiminput{sysload_i386.conf}}
+
+
+\subsection{An Example Using Advanced Configuration Features}
+The following example shows how the same System Loader configuration
+files can be used on two different systems. The platform for the examples
+is s390 which gets the boot configuration of the first stage boot
+loader in the file \texttt{zipl.conf}. Both systems share the same 
+configuration files.
+
+
+\subsubsection{zipl.conf on System 1\label{sub:zipl.conf}}
+System 1 is a virtual machine called \texttt{linux41}. The configuration
+for the first stage bootloader \texttt{zipl} references a file 
+\texttt{parmfile\_linux41.sysload}
+which contains the kernel commandline that is used to boot the initial
+System Loader linux environment.
+
+{\scriptsize \verbatiminput{zipl1.conf}}
+
+The kernel command line in \texttt{parmfile\_linux41.sysload} contains
+the parameter \texttt{quiet} to suppress unnecessary messages while
+the System Loader is booted. The second parameter references the system
+loader configuration file \texttt{sysload.conf} (shown in 
+\vref{sub:System-Loader-Configuration})
+on a disk of the virtual machine. Note that on the i386 platform usually
+the \texttt{block} URI scheme would be used instead of the \texttt{dasd}
+URI scheme.
+
+{\scriptsize \verbatiminput{parmfile_linux41.sysload}}
+
+
+\subsubsection{zipl.conf on System 2}
+System 2 is another virtual machine called \texttt{linux40}. This
+machine has a kernel and the initial ramdisk of the System Loader
+installed locally but gets the boot configuration via the network
+from system 1. The initial setup of the network interface is done
+via the \texttt{kset=} parameter on the kernel commandline. The 
+\texttt{sysload=} parameter references the boot configuration via ftp.
+
+{\scriptsize \verbatiminput{zipl2.conf}}
+
+
+\subsubsection{System Loader Configuration Used by Both Systems\label{sub:System-Loader-Configuration}\label{sub:sysload.conf-for-s390}}
+The following System Loader configuration is used by both systems
+and shows various examples for system dependent definitions, device
+setup and included configuration parts and how these capabilities
+can be combined. 
+
+{\scriptsize \verbatiminput{sysload.conf}}
+
+To show the include mechanism the definition of the generic boot entries
+\texttt{reboot}, \texttt{halt} and \texttt{shell} is done via the
+following include file:
+
+{\scriptsize \verbatiminput{standard_entries.conf}}
+
+\end{document}

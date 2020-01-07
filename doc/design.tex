@@ -1,0 +1,1397 @@
+\documentclass[12pt,a4paper,english]{article}
+\usepackage{sysload}
+\hypersetup{pdftitle={System Loader - Design}}
+
+\begin{document}
+
+\title{\Huge{}System Loader\\Design}
+\author{Michael Löhr, Ralph Würthner and Swen Schillig}
+\date{}
+
+\maketitle
+\begin{center}
+\verb|$Id: design.tex,v 1.1.1.1 2008/05/15 10:14:55 schmichr Exp $|
+\end{center}
+\thispagestyle{empty}
+\newpage
+
+\thispagestyle{empty}
+\tableofcontents
+\thispagestyle{empty}
+\newpage
+
+\sloppy
+
+
+\section{Overview}
+Traditional Linux boot loaders require massive code duplication
+in order to access filesystems, communicate over the network or drive
+hardware. With the availbility of the kexec tool this can be changed.
+The kexec tool replaces the current, running Linux kernel with a new
+Linux kernel. Inspired by the \texttt{kboot} project\footnote{%
+kboot homepage: \url{http://kboot.sourceforge.net/}},
+System Loader uses a minimal RAM disk based Linux system 
+to run a boot loader application and \texttt{kexec} to boot the final
+Linux system. Within the boot loader application all capabilities
+provided by the kernel can be used to select and access a kernel image
+and other boot files or start a shell and use it as a rescue system. 
+To simplify future extension, a plugin concept
+is used to support different user interfaces and boot methods. A regular,
+platform dependent first stage boot loader is required to start the
+minimal 'System Loader Linux'.
+
+
+
+\section{Boot Sequence}
+
+\begin{floatingfigure}[r]{0.25\columnwidth}
+\centering
+\includegraphics[width=0.24\columnwidth]{bootsequence}\par
+\caption{\label{fig:boot-sequence}\protect\\ boot sequence}
+\end{floatingfigure}
+
+Figure \ref{fig:boot-sequence} illustrates the boot sequence.
+
+After system boot a hardware dependent first stage boot loader is required
+to start the System Loader Linux. On x86 this first stage boot loader 
+will be \texttt{LILO} or \texttt{GRUB}. For zSeries systems it will be \texttt{zipl} 
+to boot from DASD, microcode in case of list-directed IPL or insfiles 
+or the z/VM reader to boot within z/VM.
+
+System Loader will run off an initial RAM disk providing the runtime 
+environment for the boot loader application. This runtime environment 
+includes a small root filesystem to initialize the Linux system and 
+start necessary daemons such a udev.
+
+Next the user interfaces will be started. These programs are
+regular user space applications which will interact with the user
+to select the kernel to be booted. After the kernel image and additional
+data, e.g. a RAM disk, are copied to a tmpfs filesystem, the final
+Linux system will be started with \texttt{kexec}. While starting the new kernel
+with \texttt{kexec} three copies of the kernel image and additional data must
+be held in memory for a short time\footnote{one in tmpfs, one in the 
+kexec tool, one in kernel memory}. 
+This limits the maximum kernel image and additional data size to
+approximately a third of the total memory size.
+
+
+
+\clearpage
+\section{System Loader Control Flow}
+
+\begin{floatingfigure}[r]{0.35\columnwidth}
+\centering
+\includegraphics[width=0.34\columnwidth]{controlflow}
+\caption{\label{fig:control-flow}System Loader\protect\\ control flow\protect\\}
+\end{floatingfigure}
+
+Figure \ref{fig:control-flow} shows the control flow within
+System Loader.
+
+First the configuration file is read and parsed. The location of the
+configuration file is passed via the kernel command line to System
+Loader. To support various location types, URIs are used.
+
+Next the user interface modules are started to interact with the user.
+Multiple user interface module instances can be started in parallel.
+This allows to interact with System Loader in various ways simultaneously.
+For example a line mode interface module can connect to the system
+console and a ssh interface module allows to remote control System
+Loader at the same time. Once the user selected or entered a boot
+configuration via any interface module instance this module will pass
+the information back to System Loader and exit. After System Loader 
+received the boot configuration the remaining interface modules are 
+notified and will be killed after a short grace period.
+
+Now the kernel image and additional boot data like a RAM disk image
+or command line arguments will be read from its source location and
+copied into a tmpfs filesystem. Like for the configuration file, URIs
+are used to address these source locations. To support various URI
+schemes and simplify addition of new URI schemes a plugin mechanism
+is used. If loading of the requested data failed, the user interface
+modules are restarted displaying an error message.
+
+The last step is booting the new kernel with the \texttt{kexec} tool. 
+If \texttt{kexec} fails the user interface modules are restarted, 
+displaying an error message.
+
+
+
+\section{Implemented Boot Methods}
+This section describes all boot methods implemented by System Loader.
+
+\subsection{Boot from kernel image file}
+This boot method uses a kernel image file specified by a URI to boot
+the final Linux system. Additional boot data which can be specified
+in the configuration file are:
+
+\begin{itemize}
+\item RAM disk image
+\item kernel command line arguments
+\item parmfile with command line arguments 
+\end{itemize}
+
+\subsection{Boot from insfile}
+This boot method will read and analyse the specified insfile to determine
+the kernel image. The identification of the components referenced
+by the insfile does not exactly reproduce the native insfile load
+mechanism. It uses a rule based approach instead. Before the rules
+can be applied every referenced file will be copied to the local filesystem.
+
+The identification is based on the properties of the file and the
+load address. Four file types can be identified: INS\_KERNEL, INS\_INITDR,
+INS\_PARMFILE and INS\_INITRDSIZE. The following rules are used to
+vote for a specific file type:
+
+\begin{itemize}
+\item file is bigger than 512 KByte $\Rightarrow$ INS\_KERNEL and INS\_INITRD
+\item file starts with a 0x1f8b gzip signature $\Rightarrow$ INS\_INITRD
+\item file has exactly 4 Byte $\Rightarrow$ INS\_INITRDSIZE
+\item file has a size that is valid for the parmfile and contains only printable
+characters $\Rightarrow$ INS\_PARMFILE
+\item load address = 0x00000000 $\Rightarrow$ INS\_KERNEL
+\item load address = 0x00010480 $\Rightarrow$ INS\_PARMFILE
+\item load address = 0x00800000 $\Rightarrow$ INS\_INITRD
+\item load address = 0x00010414 $\Rightarrow$ INS\_INITRDSIZE 
+\end{itemize}
+
+After the complete insfile is evaluated the system will be restarted
+with the files that received the maximum number of votes for kernel
+image, initial ramfs and parmfile.
+
+The approach may seem inaccurate but it avoids a detailed emulation
+of the complete zSeries IPL process and can be extended by additional
+rules if the identification should fail with specific insfiles.
+
+
+\subsection{Boot from boot map}
+This boot method allows to boot from boot maps written by \texttt{zipl} version
+1.2 or later onto DASD or FCP SCSI disks. To identify the kernel image,
+RAM disk image and command line components on the disk System Loader uses 
+a data structure written by \texttt{zipl} into the last binary
+code component for the selected program.
+
+
+
+\section{Component Descriptions}
+The following sections describes all System Loader components such
+as configuration files or the plugin interface in detail.
+
+
+\subsection{Configuration Files}
+The syntax choosen for the System Loader configuration files is a
+modified GRUB%
+\footnote{GRUB homepage: \url{http://www.gnu.org/software/grub}%
+} like syntax. Several changes were made to improve readability and
+support functions not available in GRUB. The following features can
+be configured within the configuration file:
+
+\begin{itemize}
+\item default boot configuration and timeout
+\item enable and configure user interface modules
+\item device and network setup
+\item include other configuration files
+\item for each selectable boot configuration
+
+\begin{itemize}
+\item define boot configuration title
+\item define boot configuration label
+\item define boot data root path
+\item define boot method (boot from kernel image file, insfile, boot map,
+reboot, system halt, start of a shell)
+\item configure boot method (e.g. path to kernel image file, kernel command
+line arguments, ...)
+\item protect boot configuration with a password
+\item define a message to be printed and wait for confirmation before continuing
+the boot process 
+\end{itemize}
+\end{itemize}
+
+The following sections describe the structure and evaluation of the
+System Loader configuration file. In addition the C structures used
+to store configuration information are documented. Doxygen%
+\footnote{Doxygen homepage: \url{http://www.stack.nl/ dimitri/doxygen/index.html}}
+can be used to generate a detailed documentation of the code.
+
+
+\subsubsection{Evaluation of the Configuration File}
+A scanner and parser combination generated by the \emph{flex}%
+\footnote{Flex homepage: \url{http://flex.sourceforge.net/}%
+} and \emph{bison}%
+\footnote{Bison homepage: \url{http://www.gnu.org/software/bison/}%
+} scanner and parser generator tools is used to evaluate the System
+Loader configuration file. The scanner performs pattern matching on
+the configuration file text and identifies keywords and parameter
+values. It is also responsible for the handling of include files.
+The parser recognizes structures and commands in the configuration
+file. It creates C data structures, executes recognized commands and
+provides a detailed error message in the case of syntax errors. Reasons
+for the usage of a generated scanner and parser are:
+
+\begin{itemize}
+\item automatic consistency check for the given syntax
+\item easy extensibility of the config file
+\item better readability of the scanner and parser code
+\item generation of meaningful error messages
+\item easy integration of an error recovery mechanism possible
+\end{itemize}
+
+
+\subsubsection{Syntax of the Configuration File}
+The gramimar in this section specifies the structure of a valid System
+Loader config file. Syntactic rules have the following format:
+
+\begin{verbatim}
+<rulename> :
+   <alternative 1>
+  |<alternative n>
+;
+\end{verbatim}
+
+By convention the rulenames are written in lowercase letters. Words
+in uppercase letters represent a structure that is recognized by the
+scanner (e.g. \texttt{T\_DASD} stands for the keyword \texttt{dasd},
+\texttt{T\_IDENT} stands for an identifier, \texttt{T\_STRING} for
+a string).
+
+The complete syntax is described in \texttt{sysload\_conf\_syntax.txt} 
+which is rather long and therefor not included here.
+
+\subsubsection{Device and Module Setup}
+In an environment where several (virtual) machines may have access
+to each others devices it is not wanted that every machine automatically
+detects and touches every reachable device. The s390 platform provides
+entries in the \texttt{/sys} directory that allow to enable or disable
+specific devices. Instead of manipulating these device entries directly
+the decision System Loader was to provide additional and easy
+to use device setup commands in the configuration file. Because some
+devices may need additional kernel modules, an additional setup command
+allows to load kernel modules. Module dependencies should be resolved
+automatically like in the \texttt{modprobe} command. In contrast to
+other definitions in the System Loader configuration file the setup
+commands are executed immediately. They are only executed by the main
+System Loader process and will be ignored by secondary System Loader
+processes as they are started by the \texttt{ssh} user interface command.
+
+
+\subsubsection{Network Setup}
+A working network interface is a prerequisite for other features like
+the URI support for network based protocols and the \texttt{ssh} user
+interface support. The network setup command allows to specify all
+parameters that are necessary to bring up the network interface. It
+supports static and dhcp based network setup. If dhcp based setup
+is used the static values will serve as fallback in the case that
+all dhcp requests will time out.
+
+Example:
+
+\begin{verbatim}
+setup network {
+    interface  eth0
+    mode       dhcp
+    address    9.155.23.65
+    mask       255.255.255.128
+    gateway    9.155.23.1
+    nameserver 9.64.163.21
+}
+\end{verbatim}
+
+
+\subsubsection{System Dependent Sections}
+A mechanism for system dependent sections in the System Loader configuration
+files allows to write configuration files that can be shared between
+several real or virtual systems. A system dependent section has the
+following characteristics:
+
+\begin{itemize}
+\item It starts with a system identifier that is checked to detect if the
+configuration file is evaluated on a specific system.
+\item It continues with a section that is only evaluated if the system identifier
+matches.
+\item It provides several different identification mechanisms (name of vmguest,
+name of lpar, MAC address of a network adapter, UUID of the system).
+\item It allows to check several system identifiers at the beginning of
+a system dependent section.
+\item A system dependent section is active if at least one of the system
+identifiers matches.
+\item If a system identifier is not available on the specific system it
+will never match.
+\item System dependent sections can be nested. In this case the outmost
+inactive system section overrides all nested system sections it contains.
+\item Include statements inside an inactive system section are ignored.
+\end{itemize}
+
+Example:
+\begin{verbatim}
+system vmguest(linux40,g53lp15)
+       vmguest(linux41,g53lp15)
+{
+    setup network {
+        mode static
+
+        system vmguest(linux40) {
+            address 9.152.26.120
+        }
+
+        system vmguest(linux41) {
+            address 9.152.26.121
+        }
+
+        mask 255.255.252.0
+        gateway 9.152.24.1
+        nameserver 9.152.120.241
+        interface eth0
+    }
+}
+\end{verbatim}
+
+
+\subsubsection{Configuration via the Kernel Command Line}
+In addition to the setup commands in the System Loader configuration
+file module, device and network setup can be defined on the kernel
+command line. This option is required to enable network access on
+a system that is booted with a generic System Loader kernel and ramfs
+and wants to load the System Loader configuration file via the network.
+The syntax is different to the setup commands in the System Loader
+configuration file in order to minimize the length of these commands
+on the kernel command line.
+
+Example:
+\begin{verbatim}
+kset=mod(qeth),qeth(0.0.f5db,0.0.f5dc,0.0.f5dd),\
+     static(eth0,9.152.26.120,255.255.252.0,9.152.24.1,9.152.120.241) 
+\end{verbatim}
+
+
+\subsection{Data Structures}
+\subsubsection{Enumeration \texttt{boot\_action}}
+
+This enumeration is used to define the boot method within a boot configuration:
+
+\begin{verbatim}
+enum boot_action {
+    KERNEL_BOOT,
+    INSFILE_BOOT,
+    BOOTMAP_BOOT,
+    REBOOT,
+    HALT,
+    SHELL,
+    EXIT
+};
+\end{verbatim}
+
+
+\subsubsection{Structure \texttt{cfg\_userinterface}}
+This structure is used to define one user interface module instance:
+
+\begin{verbatim}
+struct cfg_userinterface {
+    char *module;  //!< module name
+    char *cmdline; //!< module arguments
+};
+\end{verbatim}
+
+
+\subsubsection{Structure \texttt{cfg\_bentry}}
+This structure defines one boot configuration:
+
+\begin{verbatim}
+struct cfg_bentry {
+    char *title;    //!< boot item name
+    char *label;    //!< label to be referenced with \p default command
+    char *root;     //!< URI prefix for paths
+    char *kernel;   //!< kernel image URI
+    char *initrd;   //!< initrd image URI
+    char *cmdline;  //!< kernel command line
+    char *parmfile; //!< parmfile URI
+    char *insfile;  //!< insfile URI
+    char *bootmap;  //!< boot table URI
+    int locked;     //!< entry is locked
+    char *pause;    //!< display message and wait for user input
+    enum boot_action action; //!< boot action
+};
+\end{verbatim}
+
+The following members are always used: \texttt{title}, \texttt{label},
+\texttt{root}, \texttt{cmdline}, \texttt{parmfile}, \texttt{locked},
+\texttt{pause}. The remaining members are only used dependend on the
+action value:
+
+\begin{center}\begin{tabular}{|l|c|c|c|c|}
+\hline 
+\texttt{action} value / member&
+\texttt{kernel}&
+\texttt{initrd}&
+\texttt{insfile}&
+\texttt{bootmap}\\
+\hline
+\texttt{KERNEL\_BOOT}&
+used&
+used&
+not used&
+not used\\
+\hline 
+\texttt{INSFILE\_BOOT}&
+not used&
+not used&
+used&
+not used\\
+\hline
+\texttt{BOOTMAP\_BOOT}&
+not used&
+not used&
+not used&
+used\\
+\hline 
+\texttt{REBOOT}&
+not used&
+not used&
+not used&
+not used\\
+\hline
+\texttt{HALT}&
+not used&
+not used&
+not used&
+not used\\
+\hline
+\texttt{SHELL}&
+not used&
+not used&
+not used&
+not used\\
+\hline
+\texttt{EXIT}&
+not used&
+not used&
+not used&
+not used\\
+\hline
+\end{tabular}\par\end{center}
+
+
+\subsubsection{Structure \texttt{cfg\_toplevel}}
+This structure combines all definitions from above and reassembles
+the contents of a configuration file:
+
+\begin{verbatim}
+struct cfg_toplevel {
+    int boot_default; //!< default boot entry
+    int timeout;      //!< timeout in seconds before booting default entry
+    char *password;   //!< password to access locked boot entries
+    struct cfg_userinterface *ui_list; //!< list of UI instances
+    int ui_count;     //!< number of user interface instance entries
+    struct cfg_bentry *bentry_list; //!< list of boot entries
+    int bentry_count; //!< number of boot entries
+};
+\end{verbatim}
+
+
+\subsection{User Interface Modules}\label{sec:ui_modules}
+The purpose of a user interface module is to interact with the user
+via a module specific communication method and after selection of
+a boot configuration returning this information back to the system
+loader application.
+
+The interaction details for each module depend on the supported communication
+method but in general require the following tasks:
+
+\begin{itemize}
+\item print welcome message
+\item print startup message or error message in case an earlier boot request
+failed
+\item print list of all available boot configurations defined in configuration
+file
+\item query boot configuration from user
+\item query password if selected boot configuration is protected
+\item if configured, print a message and wait for confirmation before continuing
+the boot process
+\item stopping the timeout mechanism after the first user interaction
+\end{itemize}
+
+To make implementation of new user interface modules independent of
+any particular programming language each user interface module is
+implemented as a standalone executable with the following naming convention:
+
+\begin{verbatim}
+ui_<module name>
+\end{verbatim}
+
+To start a user interface module instance System Loader
+is forking a new process and calls \texttt{exec()}. If the communication
+method allows multiple instances of an interface to run simultaneously
+the user interface must ensure that there is no resource conflict
+with other instances. If an unsupported number of instances is detected
+the user interface module should return immediately with a non zero
+return code to indicate this error.
+
+The following command line arguments will be passed to a user interface
+module:
+
+\begin{verbatim}
+ui_<module name> [<argument 1>] [<argument 2>]...
+\end{verbatim}
+
+The \texttt{<argument 1>, <argument 2>, ...} arguments are taken from
+the options passed to the user interface module instance in the configuration
+file.
+
+To pass the configuration information from the configuration file
+to each user interface module environment variables are used. The
+following environment variables are set when a module is started:
+
+\begin{tabular}{|l|l|p{0.4\columnwidth}|}
+\hline 
+\textbf{Variable Name}&
+\textbf{Type}&
+\textbf{Description}\\
+\hline
+\hline 
+SYSLOAD\_VERSION&
+string&
+version number of environment variable set; current version: '0.3'\\
+\hline 
+SYSLOAD\_STARTUP\_MESSAGE&
+string&
+additional startup or error message to be displayed by user interface module\\
+\hline 
+SYSLOAD\_DEFAULT&
+integer&
+default boot configuration number\\
+\hline 
+SYSLOAD\_TIMEOUT&
+integer&
+timeout in seconds before default boot configuration is selected\\
+\hline 
+SYSLOAD\_PASSWORD&
+string&
+password to unlock boot configurations\\
+\hline 
+SYSLOAD\_BENTRY\_COUNT&
+integer&
+number of boot configurations; numbering of boot configuration variable starts with 0\\
+\hline 
+SYSLOAD\_B<NUM>\_TITLE&
+string&
+description for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_ROOT&
+string&
+URI prefix for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_KERNEL&
+string&
+kernel URI for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_INITRD&
+string&
+RAM disk URI for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_CMDLINE&
+string&
+command for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_PARMFILE&
+string&
+parmfile for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_INSFILE&
+string&
+insfile for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_BOOTMAP&
+string&
+boot map URI for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_LOCKED&
+boolean&
+set to FALSE/TRUE if boot configuration <NUM> is unlocked/locked\\
+\hline 
+SYSLOAD\_B<NUM>\_PAUSE&
+string&
+pause message for boot configuration <NUM>\\
+\hline 
+SYSLOAD\_B<NUM>\_ACTION&
+enum&
+action for boot configuration <NUM>. The following values are used: KERNEL\_BOOT, INSFILE\_BOOT, BOOTMAP\_BOOT, REBOOT, HALT\\
+\hline
+\end{tabular}
+
+The following table demonstrates how a simple configuration will be encoded:
+
+\begin{tabular}{|l|l|}
+\hline 
+\textbf{Variable Name}&
+\textbf{Value}\\
+\hline 
+\hline 
+SYSLOAD\_VERSION&
+0.3\\
+\hline 
+SYSLOAD\_STARTUP\_MESSAGE&
+\\
+\hline 
+SYSLOAD\_DEFAULT&
+0\\
+\hline 
+SYSLOAD\_TIMEOUT&
+20\\
+\hline 
+SYSLOAD\_PASSWORD&
+topsecret\\
+\hline 
+SYSLOAD\_BENTRY\_COUNT&
+2\\
+\hline 
+SYSLOAD\_B0\_TITLE&
+Boot from kernel image\\
+\hline 
+SYSLOAD\_B0\_ROOT&
+dasd://(0.0.43e6,1)/boot/\\
+\hline 
+SYSLOAD\_B0\_KERNEL&
+image-2.6.15-foo\\
+\hline 
+SYSLOAD\_B0\_INITRD&
+\\
+\hline 
+SYSLOAD\_B0\_CMDLINE&
+root=/dev/dasda1 noinitrd ro\\
+\hline 
+SYSLOAD\_B0\_PARMFILE&
+\\
+\hline 
+SYSLOAD\_B0\_INSFILE&
+\\
+\hline 
+SYSLOAD\_B0\_BOOTMAP&
+\\
+\hline 
+SYSLOAD\_B0\_LOCKED&
+\\
+\hline 
+SYSLOAD\_B0\_PAUSE&
+\\
+\hline 
+SYSLOAD\_B0\_ACTION&
+KERNEL\_BOOT\\
+\hline 
+SYSLOAD\_B1\_TITLE&
+Boot from bootmap\\
+\hline 
+SYSLOAD\_B1\_ROOT&
+\\
+\hline 
+SYSLOAD\_B1\_KERNEL&
+\\
+\hline 
+SYSLOAD\_B1\_INITRD&
+\\
+\hline 
+SYSLOAD\_B1\_CMDLINE&
+maxcpus=2 mem=256m\\
+\hline 
+SYSLOAD\_B1\_PARMFILE&
+\\
+\hline 
+SYSLOAD\_B1\_INSFILE&
+\\
+\hline 
+SYSLOAD\_B1\_BOOTMAP&
+dasd://(0.0.43e6,1)\\
+\hline 
+SYSLOAD\_B1\_LOCKED&
+TRUE\\
+\hline 
+SYSLOAD\_B1\_PAUSE&
+\\
+\hline 
+SYSLOAD\_B1\_ACTION&
+BOOTMAP\_BOOT\\
+\hline
+\end{tabular}
+
+After the user has selected a boot configuration this information
+must be sent to stdout and the module has to exit with return code
+zero. The boot information is ASCII encoded using the same syntax
+used in a boot entry section. This allows to edit a boot configuration
+in future interface modules. In case of an error the return code of
+the module must be non zero and any data sent to stdout will be ignored
+by the System Loader.
+
+The following example shows how the first boot configuration from
+the example shown above has to be returned by a user interface module:
+
+\begin{verbatim}
+boot_entry {
+    title Boot from kernel image
+    root dasd://(0.0.43e6,1)/boot/
+    kernel image-2.6.15-foo
+    cmdline root=/dev/dasda1 noinitrd ro
+}
+\end{verbatim}
+
+Once the first user interface process returned a valid boot configuration
+or when the default entry is selected by the timeout mechanism all
+remaining user interface processes will receive SIGTERM. The purpose
+of this signal is to inform about this event and each user interface
+can do a clean shutdown. Two seconds after SIGTERM System Loader
+will send SIGKILL to all remaining user interface processes
+to continue the boot process. If no boot configuration is received
+by the application within the timeout period all user interface processes
+will receive SIGTERM and after a two second wait they will be killed.
+
+A user interface process is not responsible for the timeout handling.
+The timeout value in the environment is passed for information purposes
+only. To avoid the effect that a user interface is killed by the timeout
+while a user is working on this interface the timout mechanism can
+be stopped. The main System Loader process which handles the timeout
+listens to SIGUSR1. As soon as this signal is received the timeout
+is disabled. A user interface process can retrieve the pid of the
+main System Loader process from the file defined in CFG\_PIDFILE.
+The linemode userinterface sends this signal as soon as the first
+user input was detected.
+
+
+\subsubsection{User Interface \texttt{linemode}}
+The \texttt{linemode} user interface is designed to work on each and
+every thinkable type of text based terminal. It makes no assumptions
+about screen sizes, the ability to control the cursor position or
+the detectability of pressed keys. It should work on xterm, an x3270
+emulation, a serial line and even on an antique hardware teletype.
+Even if other more sophisticated user interfaces should be implemented
+in the future the linemode user interface should still be present
+as a fallback solution.
+
+
+\subsubsection{\texttt{ssh} User Interface Support}
+
+\begin{figure}
+\begin{centering}
+\includegraphics[width=0.9\columnwidth]{ssh_concept}\par
+\end{centering}
+\caption{\label{fig:accessing-system-loader}accessing System Loader user
+interfaces via \texttt{ssh}}
+\end{figure}
+
+System Loader provides support for incoming \texttt{ssh} connections.
+The purpose of this feature is to offer a user interface of System
+Loader via a network connection. \texttt{ssh} can be defined as an
+additional user interface type in the System Loader configuration
+file. A real user interface (e.g. \texttt{linemode}) has to be specified
+in addition because the \texttt{ssh} support provides only a framework
+to handle incoming connections.
+
+Figure \ref{fig:accessing-system-loader} illustrates how any terminal
+based userinterface can be offered via ssh:
+
+\begin{itemize}
+\item the \texttt{sshd} process is started and waits for incoming connections
+\item every incoming connection will be managed by its own \texttt{ssh}
+client
+\item the \texttt{ssh} client starts a new instance of the System Loader
+main program \texttt{sysload}. Via the commandline parameter \texttt{-u
+<uiname>} this instance of System Loader is informed to skip all
+setup activities and to read and display the boot entries via the
+userinterface specified by \texttt{<uiname>.}
+\end{itemize}
+
+Example config file lines:
+\begin{verbatim}
+userinterface ssh linemode port=2222 logterm=/dev/tty rsa_key=dasd://...
+userinterface ssh ncurses <port> # ncurses UI as possible future extension
+\end{verbatim}
+
+\subsection{Component Loader}
+The component loader is responsible for accessing 'remote' files and
+create a copy on a local filesystem. A 'remote' file is any file which
+is currently not direct accessible by the kernel. Examples are files
+on a unmounted, local block device or files accessible over the network.
+To specify remote files URIs are used. Internally the component loader
+is divided into two parts: interface code within System Loader
+and a set of URI specific loader modules. The interface
+code handles incoming requests from System Loader
+and calls the appropriate loader module which can handle the specified
+URI scheme to access the requested file and create a copy on a local
+filesystem.
+
+
+\subsubsection{Loader Modules}
+Each loader module is a standalone executable which makes implementation
+of new modules independent of any programming language. The following
+is the naming convention for loader modules:
+
+\begin{verbatim}
+cl_<implemented URI scheme>
+\end{verbatim}
+
+The following command line arguments will be passed to a loader module
+by the interface code:
+
+\begin{verbatim}
+cl_<URI scheme> <local destination filename> <source URI>
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<local destination filename>&
+filename of local copy\\
+<source URI>&
+URI to identify remote file\\
+\end{tabular}
+
+On success, the loader module must exit with return code zero. A non
+zero return codes indicates an error. Informational/error messages
+can be returned via stdout/stderr.
+
+
+\subsection{Implemented URI Schemes}
+The following sections describes all implemented URI schemes.
+
+\subsubsection{DASD URI Scheme}
+This URI scheme can be used to access files on zSeries ESCON/FICON
+attached storage devices.
+
+\begin{verbatim}
+dasd://(<bus id>,[<partition>[,<filesystem type>]])/<path to file>
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<bus id>&
+Device id of DASD to be accessed.\\
+<partition>&
+Partition id on DASD, empty or '0' for whole DASD, '1' for first partition,
+etc. If <partition> is missing, the whole DASD will be used.\\
+<filesystem type>&
+Optional filesystem type if autodetection fails.\\
+<path to file>&
+Path within filesystem to access requested file.\\
+\end{tabular}
+
+Example:
+\begin{verbatim}
+dasd://(0.0.5e89,1)/boot/vmlinux-2.6.4-foo
+\end{verbatim}
+
+\subsubsection{ZFCP URI Scheme}
+This URI scheme can be used to access files on zSeries FCP attached
+storage devices.
+
+\begin{verbatim}
+zfcp://(<bus id>,<WWPN>,<LUN>[,<partition>[,<filesystem type>]])/<path to file>
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<bus id>&
+Device id of FCP channel to be used.\\
+<WWPN>&
+WWPN of Fibre Channel disk.\\
+<LUN>&
+FCP LUN of Fibre Channel disk.\\
+<partition>&
+Partition id on Fibre Channel disk, empty or '0' for whole disk, '1'
+for first partition, etc. If <partition> is missing, the whole disk
+will be used.\\
+<filesystem type> &
+Optional filesystem type if autodetection fails.\\
+<path to file>&
+Path within filesystem to access requested file.\\
+\end{tabular}
+
+Example:
+\begin{verbatim}
+zfcp://0.0.04ae,0x500507630e01fca2,0x4010404500000000,1,reiserfs)/boot/initrd
+\end{verbatim}
+
+\subsubsection{BLOCK URI Scheme}
+This URI scheme can be used to access files on a regular, local block
+device.
+
+\begin{verbatim}
+block://(<device node>[,<filesystem type>])/<path to file>
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<device node>&
+Device node of the block device to mount.\\
+<filesystem type>&
+Optional filesystem type if autodetection fails.\\
+<path to file>&
+Path within filesystem to access requested file.\\
+\end{tabular}
+
+Example:
+\begin{verbatim}
+block://(/dev/hda1,ext3)/boot/vmlinux-2.6.8-foo
+\end{verbatim}
+
+\subsubsection{FILE URI Scheme}
+This URI scheme can be used to access files on local, already mounted
+filesystems. There is only limited benefit from this URI scheme as
+within the System Loader the RAM disk is the only mounted filesystem.
+This URI scheme was added to aid debugging of the System Loader application
+during development.
+
+\begin{verbatim}
+file:///<path to file>
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<path to file>&
+Path within local filesystem to access requested file.\\
+\end{tabular}
+
+Example:
+\begin{verbatim}
+file:///boot/vmlinux-2.6.8-foo
+\end{verbatim}
+
+\subsubsection{FTP URI Scheme}
+The FTP URI scheme can be used to access files on FTP servers. If
+required, account and password credentials can be provided as expected.
+
+\begin{verbatim}
+ftp://[UID[:PW]@]host[:PORT]/<path to file>
+\end{verbatim}
+
+However, if the account name (UID) contains the ``@'' character,
+like in email-addresses, it has to be replaced by ``\%40'' to
+not interfere with the hostname separation character.
+
+Example:
+\begin{verbatim}
+ftp://my_name%40ibm.com:my_secret@ftp.my_server.com:1212/vmlinux-2.6.8-foo
+\end{verbatim}
+
+\subsubsection{HTTP URI Scheme}
+The HTTP URI scheme can be used to access files on HTTP servers and
+is identical to the FTP URI syntax. If required, account and password
+credentials can be provided as expected.
+
+\begin{verbatim}
+http://[UID[:PW]@]host[:PORT]/<path to file>
+\end{verbatim}
+
+However, if the account name (UID) contains the ``@'' character,
+like in email-addresses, it has to be replaced by ``\%40'' to
+not interfere with the hostname separation character.
+
+Example:
+\begin{verbatim}
+http://http.my_server.com:8080/vmlinux-2.6.8-foo
+\end{verbatim}
+
+\subsubsection{SCP URI Scheme}
+The SCP URI scheme can be used to access files on SSH servers. If
+required, account and password credentials can be provided as described
+in the FTP- and HTTP-URI schemes.
+
+\begin{verbatim}
+scp://[UID[:PW]@]host[:PORT]/<path to file>
+\end{verbatim}
+
+However, if the account name (UID) contains the ``@'' character,
+like in email-addresses, it has to be replaced by ``\%40'' to
+not interfere with the hostname separation character.
+
+Example:
+\begin{verbatim}
+scp://my_name%40ibm.com:my_secret@ssh.my_server.com:2222/vmlinux-2.6.8-foo
+\end{verbatim}
+
+\subsubsection{DASD Boot Map URI Scheme}
+This URI scheme can be used to specify a boot map entry on a zSeries
+ESCON/FICON attached storage device. It can be only used with the
+bootmap command.
+
+\begin{verbatim}
+dasd://(<bus id>[,<program number>])
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<bus id>&
+Device id of DASD with boot map.\\
+<program number>&
+Program number within boot map. If <program number> is missing the
+default program is booted.\\
+\end{tabular}
+
+Example:
+\begin{verbatim}
+dasd://(0.0.5e89,1)
+\end{verbatim}
+
+\subsubsection{ZFCP Boot Map URI Scheme}
+This URI scheme can be used to specify a boot map entry on a zSeries
+FCP attached storage device. It can be only used with the bootmap
+command.
+
+\begin{verbatim}
+zfcp://(<bus id>,<WWPN>,<LUN>[,<program number>])
+\end{verbatim}
+
+\begin{tabular}{p{0.3\columnwidth}p{0.6\columnwidth}}
+<bus id>&
+Device id of FCP channel to be used.\\
+<WWPN>&
+WWPN of Fibre Channel disk.\\
+<LUN>&
+FCP LUN of Fibre Channel disk.\\
+<program number>&
+Program number within boot map. If <program number> is missing the
+default program is booted.\\
+\end{tabular}
+
+Example:
+\begin{verbatim}
+zfcp://(0.0.04ae,0x500507630e01fca2,0x4010404500000000,2)
+\end{verbatim}
+
+
+
+\section{sysload\_admin}\label{sec:sysload_admin}
+This chapter describes the purpose and the design of the sysload\_admin
+utility. The sysload\_admin utility is primarily used to create and
+modify the initial ramfs which is containing System Loader and
+all required components.
+
+
+\subsection{Introduction}
+As stated above, the sysload\_admin tool was created to administer the
+environment in which System Loader is running. It does
+so be providing the following functionality:
+
+\begin{itemize}
+\item add kernel-modules, executables or libraries to the ramfs including
+dependency resolution.
+\item creating a fully featured ramfs by using only components from the
+running system (local command)
+\item change the password of the ramfs super-user 
+\end{itemize}
+
+The sysload\_admin tool is controlled by command-line options, switches
+and a mandatory configuration-file (default: /etc/sysload\_admin.conf).
+Examples of this file are provided along with System Loader.
+
+
+\subsection{Requirements}
+Depending on the command used, the sysload\_admin tool requires different
+software packages to be available. 
+
+Since the ``local'' command is using the currently running system,
+the requirements of additional packages are very minimal. The required
+packages are
+
+\begin{itemize}
+\item libssh (library required for using the SSH protocol)
+\item kexec-tools (utilities around the kexec functionality)
+\item the compiled system\_loader
+\end{itemize}
+
+All other commands of the sysload\_admin tool require the following
+additional packages
+
+\begin{itemize}
+\item gzip
+\item cpio
+\item ldd
+\item rsync
+\item get\_kernel\_version (executable)
+\end{itemize}
+
+The sysload\_admin tool expects to have direct access to all required
+components, meaning all packages have to be compiled before sysload\_admin
+is started. 
+
+
+\subsection{Configuration}\label{sec:sysload_admin_configuration}
+The main configuration of the sysload\_admin tool is represented in
+a file (default: /etc/sysload\_admin.conf), however, a few parameters
+and options can be overruled on the command-line. The following section
+describes the content the sysload\_admin configuration file.
+
+The general design of the configuration file always consists of a
+key value(s) combination. Depending on the key multiple values might
+be required, however, there's only very limited syntax and content
+validation available. The following list describes the available keys.
+
+\begin{itemize}
+\item GZIP <value> \#absolute path to the 'gzip' command
+\item FIND <value> \#absolute path to the 'find' command
+\item CPIO <value> \#absolute path to the 'cpio' command
+\item CUT <value> \#absolute path to the 'cut' command
+\item RSYNC <value> \#absolute path to the 'rsync' command
+\item GET\_K\_VERS <value> \#absolute path to the 'get\_kernel\_version'
+command
+\item MASTER\_RAMFS <value> \#absolute path to the master ramfs (usually
+a distribution ramfs)
+\item TEMP\_DIR <value> \#absolute path to a temporary directory reserved
+for sysload\_admin
+\item KERNEL <value> \#absolute path to the kernel used in conjunction with
+the ramfs
+\end{itemize}
+
+All above keys usually only appear once in the configuration file,
+however, if they appear multiple times the last combination is used.
+The keys listed below can appear as often as required.
+
+\begin{itemize}
+\item MODULE <value> \#kernel module (name) which is to be added to the
+ramfs
+\item EXEC <value> \# executable which is to be added to the ramfs (either
+absolute/relative path or no path -> in execution path of environment)
+\item LIB <value> \#absolute path of library which is to be added to ramfs
+\end{itemize}
+
+The above described keys can be overruled by command-line switches,
+either one or the other is used during program execution, whereas
+the command-line switches take precedence. The following list specifies
+keys which are only valid if sysload\_admin is started with the ``local''
+command.
+
+\begin{itemize}
+\item LOCAL\_PTX <value> \#path translation combination for libraries and
+executables (see chapter 6.4 for examples)
+\item LOCAL\_EXE <value> \#executable to add, command only if in execution
+path, fully qualified path otherwise
+\item LOCAL\_LIB <value> \#library (or any other file) to add to the ramfs
+\item LOCAL\_DEV <dev-name> <type> <major> <minor> \#device to add to the
+ramfs (see chapter 6.4 fo examples or the mknod man-page)
+\item LOCAL\_DIR <value> \#directory to add to the ramfs (e.g. LOCAL\_DIR
+/var/run )
+\item LOCAL\_LNK <target> <lnk\_name> \#symbolic link to add to the ramfs
+\item LOCAL\_TREE <source> <target> \#entire directory structure to add
+to the ramfs (like rsync)
+\end{itemize}
+File name globbing (like in shells {[}{*}?]) is supported for the
+values of LOCAL\_PTX, LOCAL\_EXE and LOCAL\_LIB, however, the LOCAL\_PTX
+value combination has to result into a 1-to-1 relationship. It is
+not possible to have multiple paths to be translated into one.
+
+
+\subsection{Configuration examples}\label{sec:sysload_conf_examples}
+
+\begin{verbatim}
+GZIP          /usr/bin/gzip 
+FIND          /usr/bin/find 
+CPIO          /usr/bin/cpio 
+CUT           /usr/bin/cut 
+RSYNC         /usr/bin/rsync 
+GET_K_VERS    /sbin/get_kernel_version
+
+MASTER_RAMFS  /boot/initrd 
+IMAGE_RAMFS   /boot/initrd-sysload.cpio.gz 
+TEMP_DIR      /tmp/SYSLOAD
+
+############### the module dependent part ################## 
+KERNEL /boot/vmlinuz 
+MODULE e100 
+MODULE reiserfs
+
+############## executables and libraries ###################
+EXEC uname 
+EXEC losetup
+LIB /lib/libpam_misc.so.0
+
+########## configuration for the 'local' switch ############
+LOCAL_PTX OFF
+LOCAL_EXE basename 
+LOCAL_EXE bash 
+LOCAL_EXE cut
+...
+
+LOCAL_EXE    sftp 
+LOCAL_PTX    ./kexec-tools-1.101/objdir-*/build / 
+LOCAL_EXE    ./kexec-tools-1.101/objdir-*/build/sbin/kexec 
+LOCAL_PTX    OFF
+
+LOCAL_LIB    /usr/lib/libcrypto.so 
+LOCAL_LIB    /lib/ld64.so.1 
+...
+
+LOCAL_DEV    /dev/random    c 1 8 
+LOCAL_DEV    /dev/urandom   c 1 9
+
+LOCAL_DIR    /dev/pts 
+LOCAL_DIR    /var/run 
+...
+
+LOCAL_LNK    /bin/bash /bin/sh 
+LOCAL_LNK    /vendor_init.sh /init
+...
+\end{verbatim}
+
+
+\subsection{Command-line options and switches}
+The sysload\_admin tool is configured and setup via its configuration
+file (see chapter \ref{sec:sysload_admin_configuration}), however, a 
+few parameters can be changed via
+the command-line at program initiation and others have to be provided
+at the command-line (one of the four commands {[}passwd, add,
+local]). The commands are used as followed:
+
+\begin{verbatim}
+passwd => change the (master-) ramfss super-user password
+add    => add executables, libraries and/or modules to the (master-) ramfs
+local  => create a ramfs with the required content and use only host 
+          resources(running OS)
+\end{verbatim}
+
+The default behaviour, as specified in the configuration file, can
+be overruled by a variety of command-line switches. This is especially
+useful if required modifications are only used once. The following
+command-line switches are available
+
+\begin{verbatim}
+-h, --help                this help text
+-V, --version             print version information
+-c, --config     <file>   configuration file name 
+                           (default /etc/sysload_admin.conf)
+-m, --master     <file>   master ramfs superseeding other ramfs' content.
+-o, --output     <file>   file name for the resulting ramfs image
+-k, --kernel     <file>   kernel file name
+-l, --lib        <file>   add DLL(s) <file,...> to ramfs (full qualified path)
+-d, --module     <module> add module(s) <module,...> to ramfs (e.g. qeth )
+-x, --executable <file>   add executable <file,...> to ramfs (e.g. losetup)
+-v, --verbose             be verbose
+-q, --quiet               be quiet
+\end{verbatim}
+If the command-line switches (-l, -m, -x) are specified on the command-line
+they overrule the settings of the configuration file. This results
+in the behaviour that only one specification (of libraries, modules
+or executables) can be active and will be used on program initiation.
+
+
+\subsection{Processing the commands}
+This chapter describes what happens behind the scene when sysload\_admin
+is started with one of the three available commands. It's only meant
+as a brief overview and not as a detailed code description. For further
+information and more detailed descriptions consult the source code
+which is easy enough to read (it's PERL).
+
+
+\subsubsection{passwd}
+The 'passwd' command is changing the ramfss super-user password. To
+do so the compressed CPIO archive is uncompressed and unpacked in
+the TEMP\_DIR directory where the self-contained password change mechanism
+is started. In detail this means, sysload\_admin is doing a 'chroot'
+into this directory and starts the 'passwd' command querying for the
+new password. Once finished the chroot environment is left and a new
+CPIO archive is created. After that the archive is compressed with
+'gzip' and stored under the name and location of the IMAGE\_RAMFS
+variable.
+
+
+\subsubsection{add}
+The 'add' command can be used to add kernel-modules, executables,
+libraries and files to the MASTER\_RAMFS ramfs. This is especially
+useful if a certain functionality needs to be added to an existing
+ramfs. The speciality of this command is that all resulting dependencies
+are resolved automatically. E.g. if an executable is added which is
+dynamically linked to libraries, this dependency is detected and the
+required libraries are added to the ramfs without naming them specifically.
+The same applies for kernel modules which might require additional
+modules or libraries which are linked to other libraries.
+
+The first step is to uncompress and unpack the MASTER\_RAMFS ramfs
+in the TEMP\_DIR directory, like with the other above described commands.
+After that the specified (command-line or configuration-file) components
+are added to the content of the ramfs. In this step it is also verified
+if certain components need to be added to fulfill the dependencies
+of each individual component and, if required, a module dependency
+file (modules.dep) is created and stored at the appropriate location.
+The final step is again creating a CPIO archive and compressing the
+resulting file at the location specified in IMAGE\_RAMFS. 
+
+
+\subsubsection{local}
+The 'local' command is used to create a ramfs from scratch with all
+the content required to have a fully functional system\_loader. In
+contrast to the other above described commands no ramfs has to exist
+before-hand and no specialized packages have to be available, yet
+all requirements have to be fulfilled by the hosting operating-system.
+The content of the ramfs is specified in the configuration file and
+can be modified to suite the requirements. This ramfs contains everything
+needed to start a system without requiring another ramfs to be merged
+to and is therefor a good point to start using the system\_loader.
+
+The first step is to create a directory structure from scratch containing
+all required components, after that the content is put into a CPIO
+archive and compressed with the 'gzip' command which is stored, as
+with the other commands, in the location specified in IMAGE\_RAMFS.
+Like with the 'add' command all dependencies are resolved and additional
+components are added if required. In addition the 'local' command
+supports a so called ``path-translation'' (LOCAL\_PTX) feature
+which can be used to store executables, libraries and files at a different
+location in the ramfs as they are found on the originating system.
+This feature is especially useful if content from a build-tree has
+to be integrated into the ramfs-system without installing the software
+on the currently running system. In addition file-name globbing [*?]
+is supported for executables, libraries and directories (resulting
+in a single directory) which eases the process of adding components
+to the ramfs (see section \ref{sec:sysload_conf_examples} for examples).
+
+
+\subsection{Design and Architecture}
+The development of the sysload\_admin tool followed a modular design
+where each major functionality is encapsulated and can be re-used
+for upcoming tasks. Good examples are the functions``unpack\_ramfs'',
+``add\_modules'', ``add\_executables'', ... , ``pack\_ramfs''
+which are used for almost all commands of the sysload\_admin tool. Therefor
+the main code, controlling all the functionality, is very small and
+only consumes not even a quarter of the source code. Beside standard
+modules the sysload\_admin tool is not using external resources and
+is not split into multiple files (beside the configuration file). 
+This results in a self-contained environment which is always functional 
+and valid. 
+
+As mentioned earlier the sysload\_admin tool is developed using the
+PERL programming language which is ideal for tasks where string-handling
+/ -modification and pattern matching are the major purpose of the
+resulting utility. To fulfill certain tasks (e.g. creating a CPIO
+archive) the sysload\_admin tool uses external commands which have to
+be available. In some cases external commands took preference over
+PERL internal APIs and commands when the PERL functionality was not
+available via standard packages or not directly available from installation
+media of a distributor (e.g. File::NCopy for an appropriate 'cp' command).
+
+Beside the statements made above the best way to understand the functionality
+and the design of the sysload\_admin tool is to read the source code,
+which is quite self-explanatory and contains comments in selected
+areas.
+
+
+\section{Extending System Loader}
+System Loader was designed to be extensible. This was achieved
+by using a plugin concept for the user interfaces and the URI scheme 
+handlers.
+
+After a new component has been created, several files need to be 
+adjusted:
+\begin{itemize}
+\item \texttt{Makefile}: The Makefile in the respective directory. 
+(Compile if necessary, install and uninstall in any case.)
+\item \texttt{sysload.spec}: The RPM build spec file to include it 
+into the RPM.
+\item \texttt{sysload\_admin.conf}: The System Loader admin config 
+to include it into the RAM disk (see section \ref{sec:sysload_admin}).
+\end{itemize}
+
+\subsection{Implementing new User Interface Modules}
+New user interface modules can be implemented using any programming
+language available on the minimal System Loader Linux system. Any new
+interface module must comply with the interface described before.
+Care must be taken when implementing a new module that only boot configuration
+data is written to stdout. 
+
+To use the new user interface module, the sysload.conf needs to be 
+adjusted as described in section \ref{sec:ui_modules}.
+
+\subsection{Implementing new Component Loader Modules}
+By writing a component loader module support for new URI schemes can
+be added. Again, such a module can be implemented using any programming
+language available on the minimal System Loader Linux system and must
+comply with the interface described before. In most cases shell scripts
+will be used. To simplify implementation of new loader modules a template
+shell script is available (\texttt{cl\_shell\_template}). 
+
+\end{document}

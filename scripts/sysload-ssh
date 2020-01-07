@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2005, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# sysload-ssh - System Loader login shell for ssh
+#
+# Parse kernel command line and launched sysload shell or 
+# sysload user interface
+#
+# Author(s): Ralph Wuerthner (rwuerthn@de.ibm.com)
+#
+
+echo "starting ssh login shell"
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+SYSLOAD_URI=$( cat /proc/cmdline | awk -F = -v RS=' ' '\
+    /^sysload=/ { print $2 }' )
+
+# launch user interface
+echo "Starting System Loader $SYSLOAD_URI ..."
+exec /usr/sysload/sysload -u linemode $SYSLOAD_URI

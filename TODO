@@ -1,0 +1,5 @@
+TODO#011: Port System Loader to libssh 0.2; or better yet, to openssh
+TODO#012: Check whether get_kernel_version could be implemented in PERL to remove this awkward dependecy
+TODO#017: sshd: Implement some kind of graceful logout when rebooting the machine
+TODO#018: Extend sysload so it can be used as a config file checker
+TODO#019: /etc/fstab is not necessary, but there still is a warning during boot. Remove the warning without adding a fstab.

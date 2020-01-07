@@ -1,0 +1,39 @@
+.\" 
+.TH "SYSLOAD" "8" "November 2007" "System Loader UI v0.1" "System Administration Utilities"
+.SH "NAME"
+sysload \- System Loader user interface
+.SH "SYNOPSIS"
+.B sysload
+[\fIOPTION\fR] \fI<configuration file URI>\fR
+.SH "DESCRIPTION"
+Start the System Loader user interface.
+
+This command is used internally by System Loader (sysload). It is only useful as part of the sysload ramdisk. Running it from a complete Linux system will not produce the expected results.
+
+The sysload user interface usually runs in a minimal Linux environment that has to be started by a platform specific first stage boot loader. It will read a boot configuration file from a location specified by an URI and display a boot selection menu as defined in this file. Based on the user selection it loads a boot configuration and reinitializes the system via the kexec system call. This second stage of the boot process will replace the already running minimal Linux system by the system selected in the boot configuration. Because the second stage is controlled dynamically by the sysload configuration file there is no need to rerun the first stage loader when the boot configuration changes.
+
+To make the sysload user interface usable on the target system, an environment containing the sysload user interface has to be configured as a boot selection of the first stage loader. On i386, lilo or grub can be used as first stage loaders. On s390, the system loader can be booted from the reader or it may use zipl as the first stage loader. A minimal first stage loader is sufficient because sysload will handle the boot selection menu and user interaction.
+
+The sysload user interface is mainly controlled via a configuration file which is described in sysload.conf(5).
+.SH "OPTIONS"
+When started manually from the command line it supports the following options:
+.TP 
+\fB\-o\fR <device>
+Output sysload status messages to <device>. Default is stdout.
+.TP 
+\fB\-u\fR <uitype>
+Start only the given user interface. Possible values: linemode /dev/console
+.TP 
+\fB\-v\fR
+Output version information and exit.
+.TP 
+\fB\-h\fR
+Display this help and exit.
+.SH "AUTHOR"
+Written by Ralph Wuerthner, Michael Loehr and Christof Schmitt.
+.SH "SEE ALSO"
+sysload.conf(5), sysload_admin(8), sysload_admin.conf(5)
+.br 
+.sp
+The System Loader distribution contains extensive documentation in the design and HOWTO documents. It is recommended to use these documents as a reference to setup a sysload based second stage bootloader.
+

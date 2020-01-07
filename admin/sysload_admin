@@ -1,0 +1,789 @@
+#!/usr/bin/perl
+# 
+# Copyright IBM Corp. 2006, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# sysload_admin
+# Main System Loader script to create and manipulate ram disks
+#
+# Author(s): Swen Schillig (swen@vnet.ibm.com)
+#
+
+use strict;
+use Getopt::Long;
+use File::Copy;
+use File::Basename;
+use File::Spec::Functions;
+use File::Path;
+use Cwd;
+
+our $VERSION = "0.3";
+
+############### command line options/switches ###############################
+my $conf_file;
+my $master;
+my $image;
+my $kernel;
+my @modules;
+my @executables;
+my @libraries;
+my @directories;
+my @devices;
+my @d_trees;
+my @links;
+my $help;
+my $vers;
+my $verbose=0;
+my $quiet=0;
+#############################################################################
+
+my $GZIP;
+my $FIND;
+my $CPIO;
+my $CUT;
+my $RSYNC;
+my $GK_VERS;
+my $t_dir;
+
+Getopt::Long::Configure("bundling");
+exit(1) unless( GetOptions('c|config=s' => \$conf_file, 'm|master=s' => \$master,
+                           'o|output=s' => \$image,'v|verbose+' => \$verbose,
+                           'l|lib=s' => \@libraries, 'd|module=s' => \@modules,
+                           'k|kernel=s' => \$kernel, 'x|executable=s' => \@executables,
+                           'h|help' => \$help, 'V|version' => \$vers, 'q|quiet' => \$quiet)
+              );
+
+$conf_file = "/etc/sysload_admin.conf" unless $conf_file;
+$verbose = 0 if($quiet);
+
+unless($< == 0)  # are we super user?
+{
+    print STDERR "You have to be super user to execute ",basename($0),"\n";
+    exit(-1);
+}
+
+if($vers)
+{
+    print STDERR basename($0)," Version: $VERSION\n";
+    exit(0);
+}
+
+if(! @ARGV or $help)
+{
+    print STDERR "Please specify a command <local|passwd|add>\n" unless $help;
+    usage();
+    exit(0);
+}
+
+@executables = split(/[,\s]/,join(',',@executables));
+@libraries   = split(/[,\s]/,join(',',@libraries));
+@modules     = split(/[,\s]/,join(',',@modules));
+
+init($ARGV[0]) or do {
+    print STDERR "Please verify your configuration file $conf_file\n",
+                 "and add the mandatory entries manually.\n";
+    exit(1);
+};
+
+if("local passwd add" !~ /\b$ARGV[0]\b/)
+{
+    print STDERR "Unknown command '$ARGV[0]'\n\n";
+    usage();
+    exit(50);
+}
+
+if( ("add" =~ /$ARGV[0]/) && (! -e $kernel))
+{
+    print STDERR "Kernel '$kernel' does not exist.\n";
+    exit(1);
+}
+
+
+if("local" !~ /\b$ARGV[0]\b/)
+{
+    print "Unpacking master ramfs '$master'\n" unless($quiet);
+    unpack_ramfs($master,catdir($t_dir,"master")) or exit(2);
+}
+else
+{
+    my $dest = catdir($t_dir,"master");
+    print "Creating master ramfs at '$dest'\n" unless($quiet);
+    if( -e $dest)
+    {
+        if( ! -d $dest )
+        {
+            print STDERR "Destination exists and is not a directory.\n";
+            return undef;
+        }
+        rmtree($dest);
+        if( -d $dest)
+        {
+            print STDERR "Cannot delete directory content.\n";
+            return undef;
+        }
+    }
+    eval { mkpath($dest) };
+    if($@) 
+    {
+        print STDERR "Cannot create $dest: $@\n";
+        return undef;
+    }
+}
+
+if($ARGV[0] eq "passwd")
+{
+    print "Changing password\n" unless($quiet);
+    change_password(catdir($t_dir,"master")) or exit(3);
+}
+elsif($ARGV[0] eq "local")
+{
+    if(@modules)
+    {
+        print "Adding modules to ramfs\n" unless($quiet);
+        add_modules(catdir($t_dir,"master"), $kernel, @modules) or do {
+            print STDERR "Cannot add modules to ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@executables)
+    {
+        print "Adding executables to ramfs\n" unless($quiet);
+        add_executables(catdir($t_dir,"master"), @executables) or do {
+            print STDERR "Cannot add executables to ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@libraries)
+    {
+        print "Adding libraries to ramfs\n" unless($quiet);
+        add_libraries(catdir($t_dir,"master"), @libraries) or do {
+            print STDERR "Cannot add libraries to ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@links)
+    {
+        print "Creating symbolic links\n" unless($quiet);
+        add_links(catdir($t_dir,"master"), @links) or do {
+            print STDERR "Cannot create links in ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@devices)
+    {
+        print "Creating devices\n" unless($quiet);
+        add_devices(catdir($t_dir,"master"), @devices) or do {
+            print STDERR "Cannot create devices in ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@directories)
+    {
+        print "Creating directories\n" unless($quiet);
+        add_directories(catdir($t_dir,"master"), @directories) or do {
+            print STDERR "Cannot create directories in ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@d_trees)
+    {
+        print "Synchronizing directory structures\n" unless($quiet);
+        add_trees(catdir($t_dir,"master"), @d_trees) or do {
+            print STDERR "Cannot synchronize directory structures to ramfs\n";
+            exit(6);
+        };
+    }
+}
+elsif($ARGV[0] eq "add")
+{
+    if(@modules)
+    {
+        print "Adding modules to ramfs\n" unless($quiet);
+        add_modules(catdir($t_dir,"master"), $kernel, @modules) or do {
+            print STDERR "Cannot add modules to ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@executables)
+    {
+        print "Adding executables to ramfs\n" unless($quiet);
+        add_executables(catdir($t_dir,"master"), @executables) or do {
+            print STDERR "Cannot add executables to ramfs\n";
+            exit(6);
+        };
+    }
+    
+    if(@libraries)
+    {
+        print "Adding libraries to ramfs\n" unless($quiet);
+        add_libraries(catdir($t_dir,"master"), @libraries) or do {
+            print STDERR "Cannot add libraries to ramfs\n";
+            exit(6);
+        };
+    }
+}
+
+print "Creating ramfs '$image'\n" unless($quiet);
+pack_ramfs($image, catdir($t_dir,"master"))   or exit(4);
+
+print("Cleaning up ...") unless($quiet);
+rmtree($t_dir, 0, 0);
+print("\n\n");
+
+
+################## SUB's ############################################
+sub usage
+{
+    $0 = basename($0);
+    print "\n[SYNTAX]  $0 [Options] <local|passwd|add>\n\n";
+    print "$0 is used to modify the initial ramfs by \n";
+    print " - adding modules, libraries or executables,\n";
+    print " - changing the password for the super-user (for ssh login).\n";
+    print "The command 'local' is primarily used to create a ramfs by using\n";
+    print "the locally available files and adding the extended boot functionality\n\n";
+    print "Commands:\n";
+    print "  local    create a -o <ramfs> based on the running systems\n";
+    print "  passwd   change password for the super-user ID in -m <ramfs>\n";
+    print "  add      add executables, libraries and/or modules to the -m <ramfs>\n";
+    print "Options:\n";
+    print "  -h|--help                this help text\n";
+    print "  -V|--version             print version information\n";
+    print "  -c|--config     <file>   configuration file name (default /etc/sysload_admin.conf)\n";
+    print "  -m|--master     <file>   master ramfs superseeding other ramfs' content.\n";
+    print "  -o|--output     <file>   file name for the resulting ramfs image\n";
+    print "  -k|--kernel     <file>   kernel file name\n";
+    print "  -l|--lib        <file>   add DLL(s) <file,...> to ramfs (full qualified path)\n";
+    print "  -d|--module     <module> add module(s) <module,...> to ramfs (e.g. qeth )\n";
+    print "  -x|--executable <file>   add executable <file,...> to ramfs (e.g. losetup)\n";
+    print "  -v|--verbose             be verbose\n";
+    print "  -q|--quiet               be quiet\n";
+}
+
+sub init
+{   
+    my $command = shift;
+    my $path_trx;
+    my $is_64bit = 0;
+    #do we have cmd_line options
+    my $extern = ! (@executables or @libraries or @modules);
+    
+    unless( -r $conf_file && open(FH, "<", $conf_file))
+    {
+        print STDERR "Cannot read configuration file '$conf_file'\n";
+	print STDERR "Specify a file through the -c parameter or check the example configuration files\n";
+        print STDERR "included in System Loader if you have not yet created a configuration file.\n";
+        exit(1);
+    }
+    
+    $is_64bit = 1 unless(! -d "/lib64");
+    
+    while(<FH>)
+    {            
+        next if(/^\s*(#.*)?$/); #goto next line if only spaces/comments
+        s/^\s*(.*)\s*#.*$/$1/;  #remove leading spaces and trailing comments/spaces
+        chomp;
+        
+        /^GZIP/         && do { ($GZIP     = $_) =~ s/GZIP[\s=]*(.*)/$1/;       next; };
+        /^FIND/         && do { ($FIND     = $_) =~ s/FIND[\s=]*(.*)/$1/;       next; };
+        /^CPIO/         && do { ($CPIO     = $_) =~ s/CPIO[\s=]*(.*)/$1/;       next; };
+        /^CUT/          && do { ($CUT      = $_) =~ s/CUT[\s=]*(.*)/$1/;        next; };
+        /^RSYNC/        && do { ($RSYNC    = $_) =~ s/RSYNC[\s=]*(.*)/$1/;      next; };
+        /^GET_K_VERS/   && do { ($GK_VERS  = $_) =~ s/GET_K_VERS[\s=]*(.*)/$1/; next; };
+        /^TEMP_DIR/     && do { ($t_dir    = $_) =~ s/TEMP_DIR[\s=]*(.*)/$1/;   next; };
+        
+        if($extern) #no cmd_line params specified,
+        {           #so read conf_file additions
+            /^MODULE[\s=]+/ && do { s/MODULE[\s=]+(.*)/$1/; push @modules, $_;   next; };
+            /^EXEC[\s=]+/   && do { s/EXEC[\s=]+(.*)/$1/; push @executables, $_; next; };
+            /^LIB[\s=]+/    && do { s/LIB[\s=]+(.*)/$1/; push @libraries, $_;    next; };
+        }
+        if("local" =~ /\b$command\b/)
+        {
+            /^LOCAL_PTX[\s=]+/ && do { s/LOCAL_PTX[\s=]+(\S+)[\s,]+(\S+)/,$1,$2/ ? $path_trx = $_ : ""; next; };
+            /^LOCAL_EXE[\s=]+/ && do { s/LOCAL_EXE[\s=]+(\S+)/$1$path_trx/; push @executables, $_; next; };
+            /^LOCAL_LIB[\s=]+/ && do { s/LOCAL_LIB[\s=]+(\S+)/$1$path_trx/; push @libraries, $_;   next; };
+            /^LOCAL_LIB64[\s=]+/ && $is_64bit && do { s/LOCAL_LIB64[\s=]+(\S+)/$1$path_trx/; push @libraries, $_;   next; };
+            /^LOCAL_DIR[\s=]+/ && do { s/LOCAL_DIR[\s=]+(\S+)/$1/; push @directories, $_; next; };
+            /^LOCAL_DEV[\s=]+/ && do { s/LOCAL_DEV[\s=]+(\S+)[\s,]+(\S{1,1})[\s,]*(\S+)?[\s,]*(\S+)?/$1,$2,$3,$4/; push @devices, $_; next; };
+            /^LOCAL_LNK[\s=]+/ && do { s/LOCAL_LNK[\s=]+(\S+)[\s,]+(\S+)/$1,$2/; push @links, $_; next; };
+            /^LOCAL_TREE[\s=]+/ && do { s/LOCAL_TREE[\s=]+(\S+)[\s,]+(\S+)/$1,$2/; push @d_trees, $_; next; };
+        }
+        /^KERNEL/       && do { ($kernel = $_) =~ s/KERNEL[\s=]+(\S+)/$1/       unless $kernel; next; };
+        /^MASTER_RAMFS/ && do { ($master = $_) =~ s/MASTER_RAMFS[\s=]+(\S+)/$1/ unless $master; next; };
+        /^IMAGE_RAMFS/  && do { ($image  = $_) =~ s/IMAGE_RAMFS[\s=]+(\S+)/$1/  unless $image;  next; };
+        
+        #print "ERROR: Invalid statement in configuration file.\n       ",$conf_file,"[",$.,"] ignored.\n";
+    }
+    
+    -x $GZIP    || do { print STDERR "GZIP('$GZIP') is not executable.\n";        return undef; };
+    -x $FIND    || do { print STDERR "FIND('$FIND') is not executable.\n";        return undef; };
+    -x $CPIO    || do { print STDERR "CPIO('$CPIO') is not executable.\n";        return undef; };
+    -x $CUT     || do { print STDERR "CUT('$CUT') is not executable.\n";          return undef; };
+    -x $RSYNC   || do { print STDERR "RSYNC('$RSYNC') is not executable.\n";      return undef; };
+    -x $GK_VERS || do { print STDERR "GET_K_VERS('$GK_VERS') is not executable.\n";
+                        print STDERR "Please make sure an executable similar to 'get_kernel_version' is made \n";
+                        print STDERR "available (see the README file or check the internet for sources).\n";
+                        print STDERR "http://www.filewatcher.com/p/aaa_base-9.3-9.2.src.rpm.317932/get_kernel_version.c.html\n";
+                        return undef; };
+    
+    return close(FH);
+}
+
+sub change_password
+{
+    my $directory = shift;
+    
+    system("cd $directory && chroot . /usr/bin/passwd sysload") == 0 or do
+    {
+        print STDERR "Cannot change passwd.\n";
+        return undef;
+    };
+    
+    return 1;
+}
+
+sub unpack_ramfs
+{
+    my $image = shift;
+    my $dest  = shift;
+    #my $temp  = getcwd();
+    
+    if( -e $dest)
+    {
+        if( ! -d $dest )
+        {
+            print STDERR "Destination exists and is not a directory.\n";
+            return undef;
+        }
+        rmtree($dest);
+        if( -d $dest)
+        {
+            print STDERR "Cannot delete directory content.\n";
+            return undef;
+        }
+    }
+    eval { mkpath($dest) };
+    if($@) 
+    {
+        print STDERR "Cannot create $dest: $@\n";
+        return undef;
+    }
+    
+    if(! -r $image)
+    {
+        print STDERR "Cannot read image '$image'.\n";
+        return undef;
+    };
+    
+    copy($image,$dest) or do {
+        print STDERR "Cannot copy image file to '$dest'.\n";
+        return undef;
+    };
+    
+    system("cd $dest && $GZIP -dc ".catfile($dest,basename($image))."|$CPIO -idu >/dev/null 2>&1") == 0 or 
+        do {
+            print STDERR "Cannot unpack ramfs: $!\n";
+            return undef;
+        };
+    
+    return unlink catfile($dest,basename($image));
+}
+
+sub pack_ramfs
+{
+    my $image  = shift;
+    my $source = shift;
+    
+    if( ! -d $source )
+    {
+        print STDERR "'$source' is not a directory.\n";
+        return undef;
+    }
+    
+    $image = catfile(getcwd(),$image) unless $image =~ /^[\/~]/ ;
+        
+    if(-e $image and ! -w $image)
+    {
+        print STDERR "Cannot write ramfs image '$image'.\n";
+        return undef;
+    }
+    
+    system("cd $source && $FIND . -print | $CPIO -o -H newc 2>/dev/null |$GZIP --best >$image") == 0 or 
+        do {
+            print STDERR "Cannot build ramfs: $!\n";
+            return undef;  
+        };
+        
+    return 1;
+}
+
+sub add_modules
+{
+    my $master = shift;
+    my $kernel = shift;
+    my @mod_list;
+    my @mod_dep;
+    my %check = {};
+    my @mod    = map { /([^\s]*).*/ } @_;
+    my $k_version = `$GK_VERS $kernel` or return undef;
+    chomp($k_version);
+    
+    open(FH,"<","/lib/modules/$k_version/modules.dep") or 
+        do {
+            print STDERR "Cannot open file '/lib/modules/$k_version/modules.dep': $!\n";
+            return undef;
+        };
+    @mod_dep = <FH>;
+    close FH;
+
+    eval { mkpath(dirname(catfile($master, "/lib/modules/$k_version/modules.dep"))) };
+    if($@)
+    {
+        print STDERR "Cannot create directory: $@\n";
+        return undef;
+    }
+
+    
+    open(FH2,">",catfile($master, "/lib/modules/$k_version/modules.dep")) or 
+          do {
+              print STDERR "Cannot open file ",
+                           catfile($master, "/lib/modules/$k_version/modules.dep"),
+                           "\n";
+              return undef;
+          };
+    
+    foreach my $module (@mod)
+    {
+        foreach my $line (@mod_dep)
+        {
+            if($line =~ /$module.ko:/)
+            {
+                print FH2 $line;  #add entry to new modules.conf
+                $check{$module} = 1;
+                $line =~ s/://;
+                my @dummy = split(/\s+/,$line);
+                push @mod_list, @dummy;
+                map { s/.*\/([\w-]*)\.ko.*/$1/ } @dummy;
+                push @mod, @dummy[1..$#dummy];
+            }
+        }
+    }
+    
+    close FH2;
+    
+    foreach my $module (@mod_list)
+    {
+        eval { mkpath(catdir($master,dirname($module))) };
+        
+        print STDERR "\tCannot create directory: $@" if($@);
+        my $temp = catdir($master, dirname($module));
+        `cp -p $module $temp`;
+    }
+
+    if($verbose)
+    {                                 
+        foreach my $module (@mod)
+        {
+            print "\tModule ",basename($module);
+
+            ($check{$module} == 1) ? print " successfully added to ramfs.\n" :
+                                     print " could not be found for kernel '$kernel'.\n";
+        }
+    }
+    return 1;
+}
+
+sub add_executables
+{
+    my $master = shift;
+    my @binaries = @_;
+    my @libs = ();
+    my @temp_vals;
+    my $temp;
+    my $src;
+    my $dest;
+    
+    foreach my $prog (@binaries)
+    {
+        chomp($prog);
+        if($prog =~ /,/)   #do path translation if required
+        {
+            ($src,@temp_vals) = split(/,/,$prog);
+            $temp = $src;
+	    $src = `which $src 2>/dev/null` unless $src =~ /\//;
+            chomp($src);
+            if($src =~ /[*?]+/)       #globbing
+            {
+                my @ent = glob($src);
+                $src = shift(@ent);
+                @ent = map { join(',',$_,@temp_vals) } @ent;
+                push @binaries, @ent;
+            }
+            if($temp_vals[0] =~ /[*?]+/)       #source path globbing
+            {
+                my @ent = glob($temp_vals[0]);
+                if(scalar(@ent) != 1)
+                {
+                    print STDERR "\tSource path globbing for '$temp_vals[0]' FAILED\n";
+                    next;
+                }
+                $temp_vals[0] = shift(@ent);
+            }
+            ($dest = $src)    =~ s/$temp_vals[0]/$temp_vals[1]/;
+        }
+        else
+        {
+            $temp = $prog;
+            $src = $dest = ($prog =~ /\//) ? $prog : `which $prog 2>/dev/null`;
+            chomp($src);
+            chomp($dest);
+            if($src =~ /[*?]+/)       #globbing
+            {
+                my @ent = glob($src);
+                $src = shift(@ent);
+                push @libraries, @ent;
+            }
+        }
+
+        if(! -x $src)
+        {
+            print STDERR "\tFile '$temp' is not executable. FAILED.\n";
+            next;
+        }
+        push @libs, `ldd $src`;
+    
+        eval { mkpath(catdir($master,dirname($dest))) };
+        if ($@) 
+        {
+            print STDERR "\tCannot create directory: $@";
+        }
+        unlink(catfile($master,$dest)); #remove existing entry before 
+                
+        $temp = catdir($master, dirname($dest) );
+                
+        `cp -p $src $temp` ; #have to use OS function to preserve file attributes
+        
+        if($? == 0)
+        {
+            print "\tFile '$src' -> '$temp' SUCCESS\n" if($verbose);
+        }
+        else
+        {
+            print STDERR "\tFile '$src' FAILED: $!\n";
+        }
+    }
+    map{ s/^\s*(\/.*)/=>$1/ } @libs;
+    @libs = map { @{[split(/=>/,$_)]}[1] } @libs;
+    return @libs ? push @libraries, @libs : 1;
+}
+
+sub add_libraries
+{
+    my $master = shift;
+    my @libraries = @_;
+    my @temp_vals;
+    my $src;
+    my $dest;
+    my %done;
+    
+    foreach my $lib (@libraries)
+    {
+        chomp($lib);
+        next if($lib =~ /^$/);
+        $lib =~ s/^\s*([^\s]*).*/$1/;
+        if($lib =~ /,/)   #do path translation if required
+        {
+            ($src,@temp_vals) = split(/,/,$lib);
+            if($src =~ /[*?]+/)       #globbing
+            {
+                my @ent = glob($src);
+                $src = shift(@ent);
+                @ent = map { join(',',$_,@temp_vals) } @ent;
+                push @libraries, @ent;
+            }
+            if($temp_vals[0] =~ /[*?]+/)       #source path globbing
+            {
+                my @ent = glob($temp_vals[0]);
+                if(scalar(@ent) != 1)
+                {
+                    print STDERR "\tSource path globbing for '$temp_vals[0]' FAILED\n";
+                    next;
+                }
+                $temp_vals[0] = shift(@ent);
+            }
+            ($dest = $src)    =~ s/$temp_vals[0]/$temp_vals[1]/;
+        }
+        else
+        {
+            $src = $dest = $lib;
+            if($src =~ /[*?]+/)       #globbing
+            {
+                my @ent = glob($src);
+                $src = shift(@ent);
+                push @libraries, @ent;
+            }
+        }
+        
+        next unless $src =~ /\//;
+        next if(defined $done{$src});
+        $done{$src} = 1;
+        
+        if( ! -e $src )
+        {
+            print STDERR "\tLibrary '$src' does not exist: FAILED\n";
+            next;
+        }
+        
+        eval { mkpath(catdir($master,dirname($dest))) };
+        if ($@) 
+        {
+            print STDERR "\tCannot create directory: $@";
+        }
+        my $temp = catdir($master, dirname($dest));
+        `cp -p $src $temp`;
+        if($? == 0)
+        {
+            print "\tLibrary '$src -> $dest' SUCCESS\n" if($verbose);
+        }
+        else
+        {
+            print STDERR "\tLibrary '$src' FAILED: $!\n";
+        }
+        
+        if(-x $src)
+        {
+            my @temp = `ldd $src`;
+            map{ s/^\s*(\/.*)/=>$1/ } @temp;
+            @temp = map { @{[split(/=>/,$_)]}[1] } @temp;
+            map { chomp } @temp;
+            map { s/^\s*(\/[^\s]*)?.*/$1/ } @temp;
+            push @libraries, @temp;
+        }
+    }
+    return 1;
+}
+
+sub add_links
+{
+    my $master = shift;
+    my @links = @_;
+    my $target;
+    my $ln_name;
+    
+    foreach my $link (@links)
+    {
+        chomp($link);
+        ($target, $ln_name) = split(/,/,$link);
+        
+        eval { mkpath(catdir($master,dirname($ln_name))) };
+        if ($@) 
+        {
+            print STDERR "\tCannot create directory: $@";
+        }
+                
+        if( eval { symlink($target, catfile($master,$ln_name)); 1} )
+        {
+            print "\tSymbolic Link '$ln_name -> $target' SUCCESS\n" if($verbose);
+        }
+        else
+        {
+            print STDERR "\tSymbolic Link '$ln_name -> $target' FAILED: $!\n";
+        }
+    }
+    return 1;
+}
+
+sub add_devices
+{
+    my $master = shift;
+    my @devices = @_;
+    my $temp;
+    my $name;
+    my $type;
+    my $major;
+    my $minor;
+    
+    foreach my $device (@devices)
+    {
+        chomp($device);
+        ($name, $type, $major, $minor) = split(/,/,$device);
+        $temp = $name;
+        $name = catfile($master, $name);
+        
+        eval { mkpath(dirname($name)) };
+        if ($@) 
+        {
+            print STDERR "\tCannot create directory: $@";
+        }
+                
+        `mknod $name $type $major $minor 2>/dev/null`;
+        if($? == 0)
+        {
+            print "\tDevice '$temp' SUCCESS\n" if($verbose);
+        }
+        else
+        {
+            print STDERR "\tDevice '$temp' FAILED\n";
+        }
+    }
+    return 1;
+}
+
+sub add_directories
+{
+    my $master = shift;
+    my @directories = @_;
+    
+    foreach my $dir (@directories)
+    {
+        chomp($dir);
+        
+        eval { mkpath(catdir($master,$dir)) };
+        if(! $@)
+        {
+            print "\tDirectory '$dir' SUCCESS\n" if($verbose);
+        }
+        else
+        {
+            print STDERR "\tDirectory '$dir' FAILED: $!\n";
+        }
+    }
+    return 1;
+}
+
+sub add_trees
+{
+    my $master = shift;
+    my @trees = @_;
+    my $temp;
+    my $src;
+    my $dest;
+    
+    foreach my $tree (@trees)
+    {
+        chomp($tree);
+        ($src, $dest) = split(/,/,$tree);
+        $temp = $dest;
+        $dest = catfile($master, $dest);
+        `$RSYNC -a $src $dest 2>/dev/null`;
+        if($? == 0)
+        {
+            print "\tSyncing '$src -> $temp' SUCCESS\n" if($verbose);
+        }
+        else
+        {
+            print STDERR "\tSyncing '$src -> $temp' FAILED\n";
+        }
+    }
+    return 1;
+}

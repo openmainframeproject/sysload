@@ -1,0 +1,135 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2005, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# cl_block
+#
+# sysload component loader module for block URI scheme:
+# access files stored on a mountable block device
+#
+# URI structure:
+# block://(<devicename>[,<filesystem type>]])/<path to file>
+#
+# devicename: name of the block device to mount
+# filesystem type: optional filesystem type if autodetection doesn't work
+# path to file: path within local filesystem to access requested file
+#
+# Author(s): Michael Loehr (mloehr@de.ibm.com)
+#            Swen Schillig (swen@vnet.ibm.com)
+#
+# $Id: cl_block,v 1.2 2008/05/16 07:35:52 schmichr Exp $
+#
+
+MOUNT_DIRECTORY=/var/sysload
+PATH=/bin:/sbin:/usr/bin
+STATUS="UNMOUNTED"
+
+# extract expression from string
+extract()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" '{ match($0, RE); print substr($0, RSTART, RLENGTH) }' \
+	2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" '{ match($0, RE); \
+	print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# return remains after removing expression from string
+remains()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" '{ match($0, RE); print substr($0, RSTART+RLENGTH) }' \
+	2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" '{ match($0, RE); \
+	print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    fi
+}
+
+
+# cleanup - unmount filesystem and remove directory
+cleanup()
+{
+    if [ $STATUS = "MOUNTED" ] ; then
+        umount $MOUNT_DIRECTORY/$$ > /dev/null 2>&1
+        rmdir $MOUNT_DIRECTORY/$$ > /dev/null 2>&1
+    else
+        rm $MOUNT_DIRECTORY/$$ >/dev/null 2>&1
+    fi
+}
+
+# check command line arguments
+if [ $# -ne 2 ] ; then
+    echo "Invalid number of arguments." >&2
+    exit 1
+fi
+DESTINATION=$1
+URI=$2
+
+# extract URI components
+URI_SCHEME=$( extract '^(([^:/?#]+):)?' "$URI" | extract '^([^:/?#]+)' )
+REMAINS=$( remains '^(([^:/?#]+):)?' "$URI" )
+
+URI_AUTHORITY=$( extract '^(//[\(]([^\)]*\)))?' "$REMAINS" | cut -c 4- )
+REMAINS=$( remains '^(//[\(]([^\)]*\)))?' "$REMAINS" )
+URI_PATH=$( extract '^([^?#]*)' "$REMAINS" )
+REMAINS=$( remains '^([^?#]*)' "$REMAINS" )
+URI_QUERY=$( extract '^(\?([^#]*))?' "$REMAINS" )
+REMAINS=$( remains '^(\?([^#]*))?' "$REMAINS" )
+URI_FRAGMENT=$( extract '^(#(.*))' "$REMAINS" )
+
+# some sanity checks
+if [ -n "$URI_QUERY" -o -n "$URI_FRAGMENT" ] ; then
+    echo "Invalid URI." >&2
+    exit 1
+fi
+
+# split authority
+DEV=$( extract '^(/([^,\)]*))?' "$URI_AUTHORITY" )
+REMAINS=$( remains '^(/([^,\)]*))?' "$URI_AUTHORITY" )
+FS=$( extract '^(,([^\)]*))?' "$REMAINS" | cut -c 2- )
+MP=`cat /proc/mounts|grep $DEV|cut -f 2 -d " "`
+
+mkdir -p $MOUNT_DIRECTORY
+
+if [ -n "$MP" ] ; then
+   STATUS="LINKED"
+   ln -s $MP $MOUNT_DIRECTORY/$$
+else
+   # mount source filesystem
+   mkdir -p $MOUNT_DIRECTORY/$$
+   if [ -n "$FS" ] ; then
+       mount -o ro -t "$FS" $DEV $MOUNT_DIRECTORY/$$
+   else
+       mount -o ro $DEV $MOUNT_DIRECTORY/$$
+   fi
+   if [ $? -ne 0 ] ; then
+       echo "Error mounting filesystem." >&2
+       cleanup
+       exit 1
+   fi
+   STATUS="MOUNTED"
+fi
+if [ ! -r "$MOUNT_DIRECTORY/$$/$URI_PATH" ] ; then
+    echo "No such file." >&2
+    cleanup
+    exit 1
+fi
+
+# copy file
+MSG=$( cp "$MOUNT_DIRECTORY/$$/$URI_PATH" "$DESTINATION" 2>&1 )
+if [ $? -ne 0 ] ; then
+    echo $MSG >&2
+    cleanup
+    exit 1
+fi
+
+cleanup
+
+exit 0

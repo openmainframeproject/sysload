@@ -1,0 +1,59 @@
+.\" 
+.TH "SYSLOAD_ADMIN" "8" "November 2007" "System Loader admin tool" "System Administration Utilities"
+.SH "NAME"
+sysload_admin \- System Loader administration tool
+.SH "SYNOPSIS"
+.B sysload_admin
+[\fIOPTIONS\fR] \fI<local|passwd|add>\fR
+.SH "DESCRIPTION"
+
+The System Loader admin tool (sysload_admin) allows to create and modify a ramdisk for the System Loader. It can add executables, shared libraries and kernel modules to the ramdisk and change the password used for accessing the SSH user interface. When adding executables that require dynamically linked libraries, these dependencies are automatically discovered and included in the ramdisk.
+
+The sysload_admin tool uses the config file /etc/sysload_admin.conf by default. If the config file to use does not exist, it has to be created. Use the various examples provided in the System Loader documentation as template and adjust it to the locations of the utilities in the running system. This depends on the Linux distribution.
+
+The command \fBlocal\fR creates a new ramdisk (or overwrites an existing one) according to the config file and the command line options.
+
+The command \fBadd\fR adds the specified files to an existing ramdisk.
+
+The command \fBpasswd\fR changes the password of the user sysload in the ramdisk. This is the user that can login to the SSH userinterface if it is enabled in the sysload.conf file.
+
+.TP 
+\fB\-h, --help\fR
+Output usage information.
+.TP 
+\fB\-V, --version\fR
+Output version information.
+.TP 
+\fB\-c, --config\fR <config file>
+Use this configuration file (default /etc/sysload_admin.conf)
+.TP
+\fB\-m, --master\fR <master ramdisk>
+Use this file as input ramdisk when adding files. This can be different than the one that is written (see -o). This ramdisk is used instead of the ramdisk defined in the config file as MASTER_RAMFS.
+.TP
+\fB\-o, --output\fR <output ramdisk>
+Write the resulting ramdisk to this file. This file is used instead of the ramdisk defined in the config file as IMAGE_RAMFS.
+.TP
+\fB\-k, --kernel\fR <kernel image>
+Use this kernel image to determine the module path under /lib/modules/. This kernel image is used instead of the one defined in the config file with KERNEL.
+.TP
+\fB\-l, --lib\fR <shared libraries>
+Add the shared libraries to the System Loader ramdisk. The files have to be given with the full path and seperated with commas (e.g. --lib /lib/libpopt.so.0.0.0,/lib/librt-2.4.so). The files are added additionally to the ones specified in the config file. Usually this option is not necessary, since the shared libraries are determined automatically from the executables included in the ramdisk.
+.TP
+\fB\-d, --module\fR <kernel modules>
+Add the kernel modules to the System Loader ramdisk. Use commas to seperate multiple module names. The modules are added additionally to the ones specified in the config file. Dependencies are resolved automatically and the modules for resolving the dependencies are also included. Example: --module zfcp,qeth
+.TP
+\fB\-x, --executable\fR <executable files>
+Add the executable files to the System Loader ramdisk
+.TP
+\fB\-v, --verbose\fR
+Output verbose messages.
+.TP
+\fB\-q, --quiet\fR
+Output less messages.
+.SH "AUTHOR"
+Written by Christof Schmitt.
+.SH "SEE ALSO"
+sysload_admin.conf(5), sysload.conf(5), sysload(8)
+.br 
+.sp
+The System Loader distribution contains extensive documentation in the design and HOWTO documents. It is recommended to use these documents as a reference to setup a sysload based second stage bootloader.

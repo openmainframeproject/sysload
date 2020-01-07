@@ -1,0 +1,241 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2005, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# cl_zfcp
+#
+# sysload component loader module for zfcp URI scheme: access file stored on
+# Fibre Channel disks attached via a zSeries FCP channel.
+#
+# URI structure:
+# zfcp://(<bus id>,<WWPN>,<LUN>[,<partition>[,<filesystem type>]])/<path to
+# file>
+#
+# bus id: device id of FCP channel to be used
+# WWPN: WWPN of Fibre Channel disk
+# LUN: FCP LUN
+# partition: partition id on Fibre Channel disk, empty or '0' for whole disk,
+#            '1' for 1st partition, ...
+# filesystem type: optional filesystem type if autodetection doesn't work
+# path to file: path within filesystem to access requested file
+#
+# Example: zfcp://(0.0.04ae,0x500507630e01fca2,0x4010404500000000,1,reiserfs)/boot/initrd
+#
+# Author(s): Ralph Wuerthner (rwuerthn@de.ibm.com)
+#            Christof Schmitt (christof.schmitt@de.ibm.com)
+#
+# $Id: cl_zfcp,v 1.2 2008/05/16 07:35:52 schmichr Exp $
+#
+
+MOUNT_DIRECTORY=/var/sysload
+PATH=/bin:/sbin:/usr/bin
+
+wait_for_devices()
+{
+    if [ -x /sbin/udevsettle ]; then
+	/sbin/udevsettle
+    else
+	/sbin/udevstart
+    fi
+}
+
+# extract expression from string
+extract()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART, RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# return remains after removing expression from string
+remains()
+{
+    if [ $# -eq 1 ] ; then
+	awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    else
+	echo "$2" | awk -v "RE=$1" \
+	'{ match($0, RE); print substr($0, RSTART+RLENGTH) }' 2> /dev/null
+    fi
+}
+
+# cleanup: unmount und unregister FCP disk
+cleanup()
+{
+    umount $MOUNT_DIRECTORY/$$ > /dev/null 2>&1
+    rmdir $MOUNT_DIRECTORY/$$ > /dev/null 2>&1
+
+    if [ -w $SCSI_DEV/delete ] ; then
+	echo 1 > $SCSI_DEV/delete
+	usleep 100000
+    fi
+
+    if [ -d $SYSPATH/$WWPN/$LUN ] ; then
+        echo $LUN > $SYSPATH/$WWPN/unit_remove
+	usleep 100000
+    fi
+
+    if [ -d $SYSPATH/$WWPN ] ; then
+        echo $WWPN > $SYSPATH/port_remove
+	usleep 100000
+    fi
+
+    if [ $( cat $SYSPATH/online ) -ne 0 ] ; then
+        echo 0 > $SYSPATH/online
+	usleep 100000
+    fi
+}
+
+
+# check command line arguments
+if [ $# -ne 2 ] ; then
+    echo "Invalid number of arguments." >&2
+    exit 1
+fi
+DESTINATION=$1
+URI=$2
+
+# extract URI components
+URI_SCHEME=$( extract '^(([^:/?#]+):)?' "$URI" | extract '^([^:/?#]+)' )
+REMAINS=$( remains '^(([^:/?#]+):)?' "$URI" )
+URI_AUTHORITY=$( extract '^(//([^/?#]*))?' "$REMAINS" | cut -c 3- )
+REMAINS=$( remains '^(//([^/?#]*))?' "$REMAINS" )
+URI_PATH=$( extract '^([^?#]*)' "$REMAINS" )
+REMAINS=$( remains '^([^?#]*)' "$REMAINS" )
+URI_QUERY=$( extract '^(\?([^#]*))?' "$REMAINS" )
+REMAINS=$( remains '^(\?([^#]*))?' "$REMAINS" )
+URI_FRAGMENT=$( extract '^(#(.*))' "$REMAINS" )
+
+# some sanity checks
+if [ -n "$URI_QUERY" -o -n "$URI_FRAGMENT" ] ; then
+    echo "Invalid URI." >&2
+    exit 1
+fi
+
+if [ -z "$( echo "$URI_AUTHORITY" | egrep '^\([[:xdigit:]]\.[[:xdigit:]]\.[[:xdigit:]]{4},0x[[:xdigit:]]{16},0x[[:xdigit:]]{16}(,[[:digit:]]*(,.+)?)?\)' )" ]
+then
+    echo "Invalid FCP device address." >&2
+    exit 1
+fi
+
+# split authority
+BUS_ID=$( extract '^\\([[:xdigit:]]\.[[:xdigit:]]\.[[:xdigit:]]*' \
+	"$URI_AUTHORITY"  | tr A-Z a-z | cut -c 2-)
+REMAINS=$( remains '^\\([[:xdigit:]]\.[[:xdigit:]]\.[[:xdigit:]]*,' \
+	"$URI_AUTHORITY" )
+WWPN=$( extract '^0x[[:xdigit:]]*' "$REMAINS" | tr A-Z a-z )
+REMAINS=$( remains '^0x[[:xdigit:]]*,' "$REMAINS" )
+LUN=$( extract '^0x[[:xdigit:]]*' "$REMAINS"  | tr A-Z a-z )
+REMAINS=$( remains '^0x[[:xdigit:]]*' "$REMAINS" )
+PARTITION=$( extract '^,[[:digit:]]*' "$REMAINS" | cut -c 2- )
+FS=$( remains '^,[[:digit:]]*,?' "$REMAINS" | extract '[^)]*' )
+if [ "$PARTITION" = "0" ] ; then
+    PARTITION=
+fi
+
+# set FCP channel online
+SYSPATH=/sys/bus/ccw/drivers/zfcp/$BUS_ID
+if [ ! -r $SYSPATH ]; then
+    echo "$BUS_ID is not a channel device." >&2
+    exit 1
+fi
+if [ $( cat $SYSPATH/online ) != "1" ] ; then
+    echo 1 > $SYSPATH/online
+    usleep 500000
+    if [ $( cat $SYSPATH/online ) != "1" ] ; then
+	echo "Bus ID $BUS_ID cannot be set online." >&2
+        exit 1
+    fi
+fi
+
+# add WWPN
+if [ ! -d $SYSPATH/$WWPN ] ; then
+    echo $WWPN > $SYSPATH/port_add
+    usleep 100000
+    if [ $( cat $SYSPATH/$WWPN/failed ) != "0" ] ; then
+	echo "WWPN $WWPN on $BUS_ID cannot be added." >&2
+	cleanup
+        exit 1
+    fi
+fi
+
+# add LUN
+if [ ! -d $SYSPATH/$WWPN/$LUN ] ; then
+    echo $LUN > $SYSPATH/$WWPN/unit_add
+    usleep 100000
+    if [ $( cat $SYSPATH/$WWPN/$LUN/failed ) != "0" ] ; then
+	echo "LUN $LUN on WWPN $WWPN on $BUS_ID cannot be added." >&2
+	cleanup
+        exit 1
+    fi
+fi
+
+# find SCSI block device
+
+wait_for_devices
+
+for SCSI_DEV in /sys/bus/scsi/devices/* ; do
+    if [ "$( cat $SCSI_DEV/hba_id )" = "$BUS_ID" -a \
+	 "$( cat $SCSI_DEV/wwpn )" = "$WWPN" -a \
+	 "$( cat $SCSI_DEV/fcp_lun )" = "$LUN" ] ; then
+
+	# The Current kernel (2.6.19) uses a symlink named like "block:sda"
+	# in the past the name was only "block", try to support both
+	BLOCKDEV=$( echo $SCSI_DEV/block* )
+
+	if [ ! -L $BLOCKDEV ] ; then
+	    echo "LUN $LUN on WWPN $WWPN on $BUS_ID is not a block device." >&2
+	    cleanup
+	    exit 1
+	fi
+	DEV="/dev/$( basename $( readlink $BLOCKDEV ) )$PARTITION"
+	break
+    fi
+done
+if [ -z "$DEV" ] ; then
+    echo "Unable find block device." >&2
+    cleanup
+    exit 1
+fi
+if [ ! -b "$DEV" ] ; then
+    echo "Unable to access block device $DEV." >&2
+    cleanup
+    exit 1
+fi
+
+# mount source filesystem
+mkdir -p $MOUNT_DIRECTORY/$$
+if [ -n "$FS" ] ; then
+    mount -o ro -t "$FS" $DEV $MOUNT_DIRECTORY/$$
+else
+    mount -o ro $DEV $MOUNT_DIRECTORY/$$
+fi
+if [ $? -ne 0 ] ; then
+    echo "Error mounting filesystem." >&2
+    cleanup
+    exit 1
+fi
+if [ ! -r "$MOUNT_DIRECTORY/$$/$URI_PATH" ] ; then
+    echo "No such file." >&2
+    exit 1
+fi
+
+# copy file
+MSG=$( cp "$MOUNT_DIRECTORY/$$/$URI_PATH" "$DESTINATION" 2>&1 )
+if [ $? -ne 0 ] ; then
+    echo $MSG >&2
+    cleanup
+    exit 1
+fi
+
+cleanup
+
+exit 0

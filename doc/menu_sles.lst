@@ -1,0 +1,17 @@
+# Modified by YaST2. Last modification on Thu Nov 22 13:11:59 CET 2007
+default 2
+timeout 8
+##YaST - generic_mbr
+gfxmenu (hd0,1)/boot/message
+##YaST - activate
+
+###Don't change this comment - YaST2 identifier: Original name: linux###
+title SUSE Linux Enterprise Server 10 SP1
+    root (hd0,1)
+    kernel /boot/vmlinuz-2.6.16.46-0.12-default root=/dev/disk/by-id/ata-WDC_AC26400R_WD-WT6270461630-part2 vga=0x317    resume=/dev/hda1 splash=silent showopts
+    initrd /boot/initrd-2.6.16.46-0.12-default
+
+title System Loader
+    root (hd0,1)
+    kernel /boot/vmlinuz kset=mod(ide-disk),mod(piix) sysload=block://(/dev/hda2,reiserfs)/boot/sysload.conf
+    initrd /boot/initrd.sysload

@@ -1,0 +1,61 @@
+.\" 
+.TH "SYSLOAD_ADMIN.CONF" "5" "November 2007" "sysload_admin config file" ""
+.SH "NAME"
+sysload_admin.conf \- configuration file for the sysload_admin tool
+.SH "DESCRIPTION"
+This file is read by the sysload_admin tool when a System Loader ramdisk is created or modified. See sysload_admin(8) for more information about this tool.
+.LP 
+The following executables are necessary for packing and unpacking the System Loader ramdisk. Therefore, these entries are required in every sysload_admin.conf.
+
+.TS
+tab (@);
+l l.
+\fBGZIP\fR @ /bin/gzip 
+\fBFIND\fR @ /usr/bin/find
+\fBCPIO\fR @ /bin/cpio
+\fBCUT\fR @ /usr/bin/cut
+\fBRSYNC\fR @ /usr/bin/rsync
+\fBGET_K_VERS\fR @ /usr/sbin/get_kernel_version
+.TE
+
+If a ramdisk is created with the sysload_admin command \fBlocal\fR, all parameters starting with \fBLOCAL_*\fR are evaluated and the specified files are added to the ramdisk:
+
+.TP
+\fBLOCAL_PTX\fR param-1 param-2
+Path-Translation: Replace any occurence of param-1 with param-2 for all \fBLOCAL_EXE\fR, \fBLOCAL_LIB\fR values. This is useful if files should be copied to a different location then they're existing in the source tree.  The translation can be reset with another value or be switched off by specifying \fBOFF\fR as the only value (without a param-2).
+
+.TP
+\fBLOCAL_EXE\fR executable
+Add this executable to the ramdisk. If the executable is in the execution path, it is found automatically. Otherwise the full path has to be specified. The LOCAL_PTX translation applies here.
+
+.TP
+\fBLOCAL_LIB\fR library
+Add this library (or other file). The fully qualified path has to be used and the LOCAL_PTX translation applies.
+
+.TP
+\fBLOCAL_LIB64\fR library
+Add this library, but only on a 64 bit environment. The LOCAL_PTX translation applies here.
+
+.TP
+\fBLOCAL_DIR\fR directory
+Create this directory in the ramdisk.
+
+.TP
+\fBLOCAL_DEV\fR file major minor
+Create the device file with the given major and minor numbers.
+
+.TP
+\fBLOCAL_LNK\fR target link_name
+Create a symbolic link inside the ramdisk: The link link_name is created and it points to target.
+
+.TP
+\fBLOCAL_TREE\fR source target
+Copy the entire tree from source on the local disk to target on the ramdisk.
+
+.SH "AUTHOR"
+Written by Christof Schmitt
+.SH "SEE ALSO"
+sysload_admin(8), sysload(8), sysload.conf(5)
+.br 
+.sp
+The System Loader distribution contains extensive documentation in the design and HOWTO documents. It is recommended to use these documents as a reference to setup a sysload based second stage bootloader.

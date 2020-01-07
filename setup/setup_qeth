@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2006, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# setup_qeth
+#
+# System Loader script to set qeth devices online on s390
+#
+#
+# Author(s): Michael Loehr   (mloehr@de.ibm.com)
+#            Christof Schmitt (christof.schmitt@de.ibm.com)
+#
+# $Id: setup_qeth,v 1.2 2008/05/16 07:35:53 schmichr Exp $
+#
+
+wait_for_devices()
+{
+    if [ -x /sbin/udevsettle ]; then
+	/sbin/udevsettle
+    else
+	/sbin/udevstart
+    fi
+}
+
+if [ $# -ne 3 ]; then
+    echo "Invalid number of parameters."
+    exit 1
+fi
+
+echo $1,$2,$3 >/sys/bus/ccwgroup/drivers/qeth/group
+echo 1 >/sys/bus/ccwgroup/drivers/qeth/$1/online
+
+wait_for_devices

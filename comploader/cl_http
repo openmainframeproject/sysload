@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Copyright IBM Corp. 2006, 2008
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License (version 2 only)
+# as published by the Free Software Foundation.
+#
+# cl_http
+#
+# sysload component loader module for file URI scheme: access files stored on
+# a HTTP server
+#
+# URI structure:
+# http://[account[:password]@]<host>/<path to file>
+#
+# if the account includes the "@" character, like in an email address
+# it has to be replaced with "%40"
+#
+# Author(s): Swen Schillig (swen@vnet.ibm.com)
+#
+# $Id: cl_http,v 1.2 2008/05/16 07:35:52 schmichr Exp $
+#
+
+if [ $# -ne 2 ]; then
+    echo "Invalid number of parameters."
+    exit 1
+fi
+
+DESTINATION=$1
+URI=$2
+
+MSG=$( /usr/bin/wget -O "$DESTINATION" "$URI" 2>&1 >/dev/null )
+if [ $? -ne 0 ] ; then
+    echo $MSG >&2
+    exit 1
+fi
